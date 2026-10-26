@@ -1,0 +1,13 @@
+﻿.venv/
+__pycache__/
+.pytest_cache/
+.ipynb_checkpoints/
+data/*
+!data/README_DATA.md
+runs/
+results/*.csv
+results/*.json
+baseline_artifacts/*.pt
+*.pt
+sample_videos/*
+!sample_videos/README.md
