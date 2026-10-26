@@ -1,0 +1,53 @@
+# Runtime defaults. Time values are seconds; score thresholds are unitless.
+model_weights: "runs/fcbam/weights/best.pt"
+device: "auto" # Automatically use CUDA when the installed PyTorch supports it; otherwise CPU.
+camera_index: 0
+camera_fps_fallback: 20
+confidence: 0.35
+class_confidence: {Eyeclosed: 0.25, Eyeopen: 0.35, Yawn: 0.35}
+iou: 0.45
+imgsz: 416 # Smaller inference size can improve live FPS; verify accuracy on your camera before presenting.
+half: false # Enable only after checking CUDA/FP16 behavior on this machine.
+class_names: [Eyeclosed, Eyeopen, Yawn]
+single_eye_closed_confidence: 0.90
+window_seconds: 30.0
+perclos_warning: 0.15
+perclos_drowsy: 0.35
+yawn_window_seconds: 60.0
+yawn_min_duration_seconds: 2.0 # Ignore short mouth openings; a yawn must persist this long.
+yawn_debounce_seconds: 2.0
+yawn_events_for_alarm: 2
+eye_weight: 0.75
+yawn_weight: 0.25
+score_warning: 0.45
+score_drowsy: 0.70
+hysteresis_margin: 0.10
+closed_eye_alarm_seconds: 1.5
+closed_eye_gap_tolerance_seconds: 0.35
+yawn_drowsy_hold_seconds: 5.0
+alarm_open_clear_seconds: 0.6
+alarm_escalation_seconds: [5.0, 10.0]
+show_detection_boxes: true
+session_log_dir: "results"
+false_alarm_dir: "results/false_alarms"
+false_alarm_capture_enabled: true
+false_alarm_buffer_seconds: 10
+false_alarm_buffer_max_mb: 80
+rest_reminder_alert_count: 3
+dataset_yaml: "data/Driver_Drowsiness_YOLO.training_ready/data.yaml"
+yawn_gap_tolerance_seconds: 0.35 # Bridge very brief detector dropouts during one yawn.
+driver_roi: [0.0, 0.0, 1.0, 1.0] # Normalized left,top,right,bottom; set for your camera to limit driver-side detections.
+minimum_eye_coverage: 0.5 # Below this fraction, PERCLOS does not drive the status score.
+face_refind_interval_frames: 5 # Re-run the built-in face detector every N frames.
+face_lost_fallback_frames: 30 # After this many missed-frame count, fall back to full-frame detections.
+face_min_size_pixels: 60 # Ignore smaller Haar face candidates.
+face_scale_factor: 1.1 # Haar detector scale step; lower values search more thoroughly and run slower.
+face_min_neighbors: 5 # Haar detector strictness; higher values reduce detections and may miss faces.
+face_box_padding_fraction: 0.25 # Expand the selected face box to include eyes and mouth.
+eye_pair_max_size_ratio: 2.0 # Maximum width or height ratio between paired eye boxes.
+head_drop_baseline_seconds: 10.0 # Time used to estimate the starting face height in the frame.
+head_drop_offset_fraction: 0.12 # Downward face-center movement from baseline, as a frame-height fraction, to count as low.
+head_drop_duration_seconds: 2.0 # Time the detected face center must remain low before a head-drop alert.
+head_drop_weight: 0.1 # Score weight for the sustained head-drop heuristic.
+minimum_event_overlap_fraction: 0.5 # Required share of a labeled event overlapped for an event match.
+near_duplicate_hash_max_distance: 4 # Maximum 64-bit perceptual-hash distance flagged by scripts/check_split.py.
