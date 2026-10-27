@@ -12,6 +12,7 @@ import yaml
 from src.detector import (Detector, expand_face_box, find_largest_face, infer_eye_state,
                           keep_detections_in_box, keep_driver_region, load_face_detector)
 from src.drowsiness import DrowsinessMonitor
+from src.main import load_config
 
 
 def overlap_fraction(predicted, truth):
@@ -67,7 +68,7 @@ def main() -> None:
     labels_path = Path(args.labels)
     if not labels_path.is_file():
         raise FileNotFoundError(f"Add clips and hand-labeled intervals first: {labels_path}")
-    cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+    cfg, _ = load_config(Path(args.config))
     detector = Detector(cfg["model_weights"], str(cfg["device"]), cfg["confidence"], cfg["iou"],
                         cfg.get("class_confidence"), cfg["imgsz"], cfg.get("half", False),
                         cfg.get("class_names", ["Eyeclosed", "Eyeopen", "Yawn"]))
@@ -118,12 +119,9 @@ def main() -> None:
                 eye = infer_eye_state(detections, float(cfg.get("single_eye_closed_confidence", .90)),
                                       float(cfg.get("eye_pair_max_size_ratio", 2.0)))
                 yawn = any(d[0] == "Yawn" for d in detections)
-                center_y = ((face_box[1] + face_box[3]) / 2 / frame.shape[0]
-                            if face_box is not None else None)
-                monitor.update(t, eye, yawn, face_center_y=center_y)
-                state = monitor.state()
-                alert = state == "DROWSY" and (monitor.eye_alarm_active() or monitor.yawn_alert_active()
-                                                or monitor.head_drop_active)
+                monitor.update(t, eye, yawn, face_visible=face_box is not None)
+                state = monitor.alert_level()
+                alert = state != "NORMAL"
                 times.append(t)
                 states.append(alert)
         finally:

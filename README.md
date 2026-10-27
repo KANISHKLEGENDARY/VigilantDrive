@@ -21,26 +21,28 @@ py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe realtime.py
 ```
 
-Press **Q** in the video window to quit. The model path, camera index, image size, and thresholds are in `config.yaml`. The project does not require model retraining to run the demo. For video files, use `python realtime.py --source "path\to\clip.mp4"`.
+Press **Q** in the video window to quit and **D** to hide/show diagnostics. The checkpoint path and output folders are in `config.yaml`; numeric thresholds are in `src/config.py`. MediaPipe Face Mesh is added through `requirements.txt`. The demo uses the existing YOLO checkpoint without retraining it. For a video file, use `python realtime.py --source "path\to\clip.mp4"`.
 
 ## Simple architecture
 
 1. `realtime.py` starts `src/main.py`.
-2. `src/main.py` reads camera frames, finds the largest Haar-detected face, filters model detections around it, draws the display, and writes session measurements.
-3. `src/detector.py` loads the trained YOLO checkpoint and interprets eye boxes.
-4. `src/drowsiness.py` tracks PERCLOS, sustained yawns, eye coverage, and the optional head-drop signal over time.
-5. `src/alarm.py` repeats and escalates the sound while an alarm condition remains active.
-6. `src/metrics.py` records frame-level values to a CSV file in `results/`.
+2. `src/main.py` reads frames, runs calibration, uses the largest visible face, draws the display, and writes session measurements.
+3. `src/detector.py` loads the unchanged YOLO checkpoint. `src/face_signals.py` adds ready-made MediaPipe eye and head landmarks; it does not train a model.
+4. `src/eye_logic.py` combines YOLO and eye aspect ratio (EAR) and rejects brief frame-level changes.
+5. `src/drowsiness.py` calculates time-based PERCLOS and maps eye, yawn, visibility, and head-pose signals to one state.
+6. `src/alarm.py` maps that same state to sound patterns on a separate thread.
+7. `src/metrics.py` writes eye/head values, alert state, FPS, and frame time to a CSV under `results/`.
 
-The face detector selects the largest detected face as a driver proxy. It is not face identity or driver tracking. When no face is found for the configured period, detections fall back to the full frame and the screen warns that the driver was not found.
+The largest visible face is only a driver proxy, not identity tracking. When face landmarks are unavailable, the app ignores whole-frame eye/yawn detections and raises a driver-not-found alert after the configured delay.
 
 ## How the alarm works
 
-A sustained eye closure can trigger an alert after `closed_eye_alarm_seconds`. A yawn must last `yawn_min_duration_seconds`; repeated yawns can trigger an alert according to `yawn_events_for_alarm` and `yawn_drowsy_hold_seconds`. A detected face center that moves down by the configured fraction of the frame and stays there for the configured duration now also triggers an alert. The alarm repeats while an alert remains active and stops after the clear delay. This is a face-position change, **not a measurement of head pitch or gaze**. These are prototype settings, not validated medical thresholds.
+Thresholds and alarm patterns are listed in [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) and configured in `src/config.py`. The visible state is the same state used to choose the alarm pattern. It holds the alert until the face is visible, eyes are open, the image is clear, and the head is up for the required time. These are prototype settings, not validated medical thresholds.
 
 ## Evaluation and data checks
 
 - `python scripts/evaluate.py --weights "runs/fcbam/weights/best.pt" --data "data/Driver_Drowsiness_YOLO.training_ready/data.yaml" --split test` evaluates object detection at the `imgsz` configured in `config.yaml`.
+- To list alert start/stop times for one clip, run `python scripts/test_video.py "path\to\demo.mp4"`. Add `--labels "path\to\labels.csv"` with `start_sec,end_sec,label` columns to measure the longest silent gap inside labeled drowsy intervals.
 - Put consented test clips and hand labels in `sample_videos/`, then run `python scripts/test_videos.py`. It writes `results/results.md` with event recall, alarm precision, false alarms per hour, and alert delay grouped by filename condition.
 - `python scripts/check_split.py` checks train/validation files using exact image hashes, perceptual similarity, and source-like filename prefixes. A filename-prefix check is only a heuristic; it cannot prove that drivers are separated if the filenames do not identify them.
 - The current train/validation audit flagged **100 exact duplicate hashes**, **178 shared filename prefixes**, and **12,280 possible perceptual-hash matches**. Some sampled candidates are frames from the same person and scene. Treat validation results as potentially optimistic; the prefix and perceptual checks need manual review, and driver-level split isolation is not established.
@@ -49,11 +51,11 @@ When the demo saves a review clip, it writes an overlay version and a clean vers
 
 ## Limitations
 
-- The largest Haar-detected face is only a driver proxy. Passengers, missed faces, camera motion, and non-frontal faces can still cause errors.
-- The eye pairing and face-position drop checks are geometric heuristics. The head-drop rule can miss a head tilt if the face center does not move down, and can react to camera movement or normal posture changes.
-- Per-driver calibration is not implemented. The detector provides class confidence scores and boxes, not eye landmarks or a validated personal eye measurement; changing the closed-eye threshold from open-eye confidence would be an unvalidated rule.
-- The score thresholds and head-drop rule need testing across more drivers, lighting, glasses, and camera angles.
-- The system does not use head pose, vehicle speed, or GPS. Speed/GPS and validated head-pose input are future work.
+- The largest face is a driver proxy, not driver identification. More than one person, occlusion, and camera movement can still confuse it.
+- EAR and head angles are landmark estimates, not validated medical or vehicle-approved measurements. Camera orientation and calibration affect them; check the displayed angle direction on your own camera.
+- Startup calibration uses about five seconds of open-eye, forward-facing measurements. It waits if it cannot collect enough valid samples.
+- Dark/blur checks use simple brightness and sharpness rules. Glasses, sunglasses, night lighting, camera placement, and face angles still need testing.
+- The app does not use vehicle speed or GPS. Its head-pose logic is a prototype and has not been validated across drivers.
 - Object-detection mAP does not show whether drowsiness alerts are caught reliably or how often false alarms occur.
 - No event-level video results have been measured for this project yet. Do not use this prototype as a real driving safety device.
 

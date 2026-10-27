@@ -11,6 +11,7 @@ import yaml
 from src.detector import (Detector, expand_face_box, find_largest_face, infer_eye_state,
                           keep_detections_in_box, keep_driver_region, load_face_detector)
 from src.drowsiness import DrowsinessMonitor
+from src.main import load_config
 from scripts.evaluate_demo import match_events, event_recall, alarm_precision, false_alarms_per_hour, average_detection_delay
 
 
@@ -69,7 +70,7 @@ def main():
         if label not in {"drowsy", "alert", "normal"}:
             raise ValueError(f"Unsupported label {label!r}; use drowsy or normal in {labels_path}")
         labels_by_video[Path(row["video"]).name].append((start, end, label))
-    cfg = yaml.safe_load(Path(args.config).read_text(encoding="utf-8"))
+    cfg, _ = load_config(Path(args.config))
     detector = Detector(cfg["model_weights"], str(cfg["device"]), cfg["confidence"], cfg["iou"],
                         cfg.get("class_confidence"), int(cfg["imgsz"]), cfg.get("half", False), cfg["class_names"])
     cascade = load_face_detector()
@@ -111,12 +112,10 @@ def main():
                 eyes = infer_eye_state(detections, float(cfg.get("single_eye_closed_confidence", .90)),
                                        float(cfg.get("eye_pair_max_size_ratio", 2.0)))
                 yawn = any(item[0] == "Yawn" for item in detections)
-                center_y = ((face_box[1] + face_box[3]) / 2 / frame.shape[0] if face_box else None)
                 t = (frame_count - 1) / fps
-                monitor.update(t, eyes, yawn, face_center_y=center_y)
-                state = monitor.state()
-                active.append(state == "DROWSY" and (monitor.eye_alarm_active() or monitor.yawn_alert_active()
-                                                      or monitor.head_drop_active))
+                monitor.update(t, eyes, yawn, face_visible=face_box is not None)
+                state = monitor.alert_level()
+                active.append(state != "NORMAL")
                 times.append(t)
         finally:
             cap.release()
