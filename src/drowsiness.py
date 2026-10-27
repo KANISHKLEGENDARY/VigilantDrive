@@ -157,7 +157,7 @@ class DrowsinessMonitor:
 
     def eye_status(self) -> str:
         if self.last_eye_state is None:
-            return "UNKNOWN — eyes not visible"
+            return "UNKNOWN - eyes not visible"
         return "CLOSED" if self.last_eye_state else "OPEN"
 
     def perclos(self) -> float:
@@ -258,7 +258,7 @@ class DrowsinessMonitor:
             self._reason, self.current_state = "Head-down posture", "WARNING"
             return self.current_state
         if self.head_turn_since is not None and now - self.head_turn_since >= self.cfg["head_turn_warning_seconds"]:
-            self._reason, self.current_state = "Distracted — head turned", "WARNING"
+            self._reason, self.current_state = "Distracted - head turned", "WARNING"
             return self.current_state
         if self.unknown_eye_since is not None and now - self.unknown_eye_since >= self.cfg["unknown_eye_warning_seconds"]:
             self._reason, self.current_state = "Eyes unclear while face is visible", "WARNING"
