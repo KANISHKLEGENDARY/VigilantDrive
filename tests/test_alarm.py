@@ -1,18 +1,28 @@
+import pytest
 from src.alarm import Alarm
+from src.config import ALERT_POLICIES
 
 
-def test_alarm_starts_only_for_qualifying_drowsy_signal_and_clears_after_open_delay():
-    alarm = Alarm(open_clear_seconds=0.6, escalation_seconds=(5.0, 10.0), audio_enabled=False)
-    assert not alarm.update("WARNING", 0.0)
-    assert not alarm.update("DROWSY", 1.0, eye_closed=False)
-    assert alarm.update("DROWSY", 2.0, eye_closed=True)
-    assert not alarm.update("DROWSY", 4.0, eye_closed=True)
-    assert not alarm.update("DROWSY", 7.1, eye_closed=True)  # Tone level may escalate, alarm does not restart.
-    assert not alarm.update("NORMAL", 7.2, eye_closed=False)
-    assert not alarm.update("NORMAL", 7.9, eye_closed=False)
-    assert alarm.update("DROWSY", 8.0, yawn_active=True)
-    assert not alarm.update("DROWSY", 9.0, head_drop_active=True)
-    assert not alarm.update("NORMAL", 9.1)
-    assert not alarm.update("NORMAL", 10.0)
-    assert alarm.update("DROWSY", 10.1, head_drop_active=True)
+@pytest.mark.parametrize("level", [name for name in ALERT_POLICIES if name != "NORMAL"])
+def test_each_alert_policy_level_is_returned_as_the_actual_state(level):
+    alarm = Alarm(audio_enabled=False)
+    assert alarm.update(level, 0.0) == level
+    alarm.close()
+
+
+def test_state_cannot_clear_before_minimum_duration_and_safe_window():
+    alarm = Alarm(open_clear_seconds=2.0, minimum_alarm_seconds=3.0, audio_enabled=False)
+    assert alarm.update("DROWSY", 0.0) == "DROWSY"
+    assert alarm.update("NORMAL", 1.0, safe_to_clear=True) == "DROWSY"
+    assert alarm.update("NORMAL", 2.9, safe_to_clear=True) == "DROWSY"
+    assert alarm.update("NORMAL", 3.1, safe_to_clear=True) == "NORMAL"
+    alarm.close()
+
+
+def test_a_drowsy_alarm_does_not_drop_to_warning_on_one_safe_frame():
+    alarm = Alarm(audio_enabled=False)
+    assert alarm.update("DROWSY", 0.0) == "DROWSY"
+    assert alarm.update("WARNING", 0.5, safe_to_clear=False) == "DROWSY"
+    assert alarm.update("WARNING", 4.0, safe_to_clear=True) == "DROWSY"
+    assert alarm.update("WARNING", 6.1, safe_to_clear=True) == "WARNING"
     alarm.close()

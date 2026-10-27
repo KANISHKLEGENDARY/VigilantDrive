@@ -20,7 +20,7 @@ def test_open_signal_is_normal():
 
 def test_sustained_closure_becomes_drowsy():
     monitor = DrowsinessMonitor(cfg())
-    for t in range(12):
+    for t in range(3):
         monitor.update(float(t), True, False)
     assert monitor.perclos() == 1.0
     assert monitor.state() == "DROWSY"
@@ -39,7 +39,7 @@ def test_short_blink_warns_but_does_not_start_direct_alarm():
     assert monitor.state() == "NORMAL"
 
 
-def test_unknown_eye_time_is_not_open_and_stale_perclos_loses_authority():
+def test_unknown_eye_time_becomes_a_warning_and_never_forces_normal():
     monitor = DrowsinessMonitor(cfg())
     for t in range(5):
         monitor.update(float(t), False, False)
@@ -51,10 +51,10 @@ def test_unknown_eye_time_is_not_open_and_stale_perclos_loses_authority():
         monitor.update(float(t), None, False)
     assert monitor.eye_status().startswith("UNKNOWN")
     assert monitor.eye_coverage() < cfg()["minimum_eye_coverage"]
-    assert monitor.state() == "NORMAL"
+    assert monitor.state() in {"WARNING", "DROWSY"}
 
 
-def test_low_eye_coverage_makes_closed_observations_not_change_perclos_score():
+def test_low_coverage_does_not_switch_off_conservative_perclos():
     sparse = DrowsinessMonitor(cfg())
     closed = DrowsinessMonitor(cfg())
     for t in range(10):
@@ -62,7 +62,49 @@ def test_low_eye_coverage_makes_closed_observations_not_change_perclos_score():
         closed.update(float(t), True if t == 0 else None, False)
     assert sparse.eye_coverage() < cfg()["minimum_eye_coverage"]
     assert closed.eye_coverage() < cfg()["minimum_eye_coverage"]
-    assert sparse.score() == closed.score()
+    assert sparse.perclos() > 0.0
+    assert sparse.score() > 0.0
+
+
+def test_perclos_over_warning_threshold_never_reports_normal():
+    monitor = DrowsinessMonitor(cfg())
+    for t in range(3):
+        monitor.update(float(t), True, False)
+    for t in range(3, 11):
+        monitor.update(float(t), False, False)
+    assert monitor.perclos() >= cfg()["perclos_warning"]
+    assert monitor.state() in {"WARNING", "DROWSY"}
+
+
+def test_unknown_eyes_on_visible_face_raise_warning_after_one_second():
+    monitor = DrowsinessMonitor(cfg())
+    monitor.update(0.0, None, False, face_visible=True)
+    monitor.update(1.1, None, False, face_visible=True)
+    assert monitor.state() == "WARNING"
+
+
+def test_face_missing_for_three_seconds_raises_driver_not_found():
+    monitor = DrowsinessMonitor(cfg())
+    monitor.update(0.0, None, False, face_visible=False)
+    monitor.update(3.1, None, False, face_visible=False)
+    assert monitor.state() == "DRIVER_NOT_FOUND"
+
+
+def test_head_pose_escalates_by_duration():
+    monitor = DrowsinessMonitor(cfg())
+    monitor.update(0.0, False, False, head_pitch=26.0)
+    monitor.update(2.1, False, False, head_pitch=26.0)
+    assert monitor.state() == "WARNING"
+    monitor.update(4.1, False, False, head_pitch=26.0)
+    assert monitor.state() == "CRITICAL"
+
+
+def test_sustained_head_turn_raises_distracted_warning():
+    monitor = DrowsinessMonitor(cfg())
+    monitor.update(0.0, False, False, head_yaw=36.0)
+    monitor.update(3.1, False, False, head_yaw=36.0)
+    assert monitor.state() == "WARNING"
+    assert "Distracted" in monitor.reason()
 
 
 def test_only_sustained_yawn_episodes_count():
@@ -84,20 +126,20 @@ def test_only_sustained_yawn_episodes_count():
     assert monitor.yawn_alert_active()
 
 
-def test_sustained_downward_face_movement_adds_to_score():
+def test_sustained_head_pitch_adds_to_score_and_warns():
     settings = cfg()
-    settings.update({"head_drop_baseline_seconds": 2.0, "head_drop_offset_fraction": 0.1,
-                     "head_drop_duration_seconds": 1.0, "head_drop_weight": 0.1})
+    settings.update({"head_down_angle_degrees": 25.0, "head_down_warning_seconds": 1.0,
+                     "head_down_critical_seconds": 5.0, "head_drop_weight": 0.1})
     monitor = DrowsinessMonitor(settings)
     for t in range(3):
-        monitor.update(float(t), False, False, face_center_y=0.4)
+        monitor.update(float(t), False, False, head_pitch=0.0)
     baseline_score = monitor.score()
     for t in (3.0, 4.0, 5.0):
-        monitor.update(t, False, False, face_center_y=0.6)
+        monitor.update(t, False, False, head_pitch=26.0)
     assert monitor.head_drop_active
     assert monitor.score() > baseline_score
-    assert monitor.state() == "DROWSY"
-    assert monitor.reason() == "Sustained downward face position"
+    assert monitor.state() == "WARNING"
+    assert monitor.reason() == "Head-down posture"
 
 
 def test_reset_clears_temporal_history():
