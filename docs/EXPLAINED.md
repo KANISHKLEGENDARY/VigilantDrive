@@ -15,6 +15,8 @@ This document describes the current rules in plain language. The YOLO weights we
 
 The display state and alarm state come from the same monitor state. This is a laptop prototype, not a certified driver-safety system.
 
+**Head-pitch sign and eye fusion:** The camera reports an angle relative to the driver's startup baseline. `angle_delta` finds the shortest signed difference, and `head_pitch_delta` applies the camera's direction multiplier so positive means the chin moved down; negative means it moved up/back. For eyes, unavailable EAR falls back to YOLO. EAR below the calibrated closed cutoff is treated as closed unless YOLO confidently says both eyes are open, in which case the result is unknown. EAR between that cutoff and 85% of the open-eye baseline is borderline: only a strong paired YOLO result with both eyes closed may override it. At or above 85%, EAR says open and YOLO cannot override it.
+
 ## Important thresholds
 
 | Setting | Current default | Meaning |
