@@ -5,7 +5,7 @@ from collections import deque
 from src.config import DEFAULT_RUNTIME_CONFIG
 from src.config import (CAMERA_CLEAR_SECONDS, FACE_RETURN_CLEAR_SECONDS,
                         PERCLOS_MIN_HISTORY_SECONDS, RECOVERY_CLEAR_SECONDS,
-                        TIMER_GRACE_SECONDS)
+                        PERCLOS_SAFE_CLEAR_SECONDS, TIMER_GRACE_SECONDS)
 
 
 class GraceTimer:
@@ -78,6 +78,8 @@ class DrowsinessMonitor:
         self.camera_clear_since: float | None = None
         self.perclos_history_start: float | None = None
         self._recovery_cleared = False
+        self.perclos_only_alert = False
+        self._perclos_recovery_suppressed = False
 
     def reset(self) -> None:
         """Clear temporal state after a camera interruption or new clip."""
@@ -114,6 +116,8 @@ class DrowsinessMonitor:
         self.camera_clear_since = None
         self.perclos_history_start = None
         self._recovery_cleared = False
+        self.perclos_only_alert = False
+        self._perclos_recovery_suppressed = False
 
     def update(self, t: float, eye_closed: bool | None, yawn: bool, *, face_visible: bool = True,
                head_pitch: float | None = None, head_yaw: float | None = None,
@@ -194,6 +198,9 @@ class DrowsinessMonitor:
         recovered = (eye_closed is False and face_visible and camera_clear
                      and (head_pitch is None or self.head_pitch < self.cfg["head_down_angle_degrees"])
                      and (head_yaw is None or abs(self.head_yaw) < self.cfg["head_turn_angle_degrees"]))
+        if not recovered:
+            # New unsafe evidence permits a later PERCLOS alert to start again.
+            self._perclos_recovery_suppressed = False
         recovered_since = self.ok_timer.update(recovered, t)
         if recovered_since is None:
             self._recovery_cleared = False
@@ -212,6 +219,8 @@ class DrowsinessMonitor:
             self.last_yawn_event = float("-inf")
             self.current_state = "NORMAL"
             self._reason = "No drowsiness signal"
+            self.perclos_only_alert = False
+            self._perclos_recovery_suppressed = False
             self._recovery_cleared = True
 
     def _prune(self, now: float) -> None:
@@ -308,10 +317,11 @@ class DrowsinessMonitor:
     def reason(self) -> str:
         return self._reason
 
-    def _set_result(self, state: str, reason: str) -> str:
+    def _set_result(self, state: str, reason: str, *, perclos_only: bool = False) -> str:
         """Set state and reason together so the overlay cannot contradict itself."""
         assert reason != "No drowsiness signal" or state == "NORMAL"
         self.current_state, self._reason = state, reason
+        self.perclos_only_alert = perclos_only and state != "NORMAL"
         return state
 
     def state(self) -> str:
@@ -353,8 +363,18 @@ class DrowsinessMonitor:
         if self.recent_yawn():
             return self._set_result("WARNING", "Sustained yawn detected")
 
+        safe_since = self.ok_timer.active_since
+        safe_for = now - safe_since if safe_since is not None else 0.0
+        if self._perclos_recovery_suppressed:
+            return self._set_result("NORMAL", "Recent PERCLOS alert cleared after recovery")
+        if (self.perclos_only_alert and safe_for >= self.cfg.get(
+                "perclos_safe_clear_seconds", PERCLOS_SAFE_CLEAR_SECONDS)):
+            self._perclos_recovery_suppressed = True
+            return self._set_result("NORMAL", "Recent PERCLOS alert cleared after recovery")
+
         score = self.score()
         perclos = self._reliable_perclos()
+        history_only = self.yawn_events() == 0 and not self.head_drop_active
         previous = self.current_state
         warning_enter = self.cfg.get("perclos_warning_enter", 0.25)
         warning_exit = self.cfg.get("perclos_warning_exit", 0.15)
@@ -362,17 +382,23 @@ class DrowsinessMonitor:
         drowsy_exit = self.cfg.get("perclos_drowsy_exit", 0.25)
         if previous in {"DROWSY", "CRITICAL"}:
             if perclos >= drowsy_exit or score >= self.cfg["score_drowsy"] - self.cfg["hysteresis_margin"]:
-                return self._set_result("DROWSY", "Elevated recent eye-closure rate")
+                return self._set_result("DROWSY", "Elevated recent eye-closure rate",
+                                        perclos_only=history_only)
             if perclos >= warning_exit or score >= self.cfg["score_warning"] - self.cfg["hysteresis_margin"]:
-                return self._set_result("WARNING", "Elevated recent drowsiness signal")
+                return self._set_result("WARNING", "Elevated recent drowsiness signal",
+                                        perclos_only=history_only)
         elif previous == "WARNING":
             if perclos >= drowsy_enter or score >= self.cfg["score_drowsy"]:
-                return self._set_result("DROWSY", "Drowsiness signal above threshold")
+                return self._set_result("DROWSY", "Drowsiness signal above threshold",
+                                        perclos_only=history_only)
             if perclos >= warning_exit or score >= self.cfg["score_warning"] - self.cfg["hysteresis_margin"]:
-                return self._set_result("WARNING", "Elevated recent drowsiness signal")
+                return self._set_result("WARNING", "Elevated recent drowsiness signal",
+                                        perclos_only=history_only)
         else:
             if perclos >= drowsy_enter or score >= self.cfg["score_drowsy"]:
-                return self._set_result("DROWSY", "PERCLOS or score above drowsy threshold")
+                return self._set_result("DROWSY", "PERCLOS or score above drowsy threshold",
+                                        perclos_only=history_only)
             if perclos >= warning_enter or score >= self.cfg["score_warning"]:
-                return self._set_result("WARNING", "PERCLOS or score above warning threshold")
+                return self._set_result("WARNING", "PERCLOS or score above warning threshold",
+                                        perclos_only=history_only)
         return self._set_result("NORMAL", "No drowsiness signal")
