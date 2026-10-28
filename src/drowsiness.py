@@ -3,6 +3,34 @@ from __future__ import annotations
 
 from collections import deque
 from src.config import DEFAULT_RUNTIME_CONFIG
+from src.config import (CAMERA_CLEAR_SECONDS, FACE_RETURN_CLEAR_SECONDS,
+                        PERCLOS_MIN_HISTORY_SECONDS, RECOVERY_CLEAR_SECONDS,
+                        TIMER_GRACE_SECONDS)
+
+
+class GraceTimer:
+    """Keep a condition active through short false readings."""
+
+    def __init__(self, grace_seconds: float = TIMER_GRACE_SECONDS):
+        self.grace_seconds = grace_seconds
+        self.active_since: float | None = None
+        self.false_since: float | None = None
+
+    def update(self, condition: bool | None, now: float) -> float | None:
+        """Return the start time until the condition stays false beyond grace."""
+        if condition is None:
+            return self.active_since
+        if condition:
+            self.false_since = None
+            if self.active_since is None:
+                self.active_since = now
+        elif self.active_since is not None:
+            if self.false_since is None:
+                self.false_since = now
+            elif now - self.false_since > self.grace_seconds:
+                self.active_since = None
+                self.false_since = None
+        return self.active_since
 
 
 class DrowsinessMonitor:
@@ -40,6 +68,16 @@ class DrowsinessMonitor:
         self.head_yaw = 0.0
         self.face_visible = True
         self.camera_clear = True
+        grace = float(self.cfg.get("timer_grace_seconds", TIMER_GRACE_SECONDS))
+        self.head_down_timer = GraceTimer(grace)
+        self.head_turn_timer = GraceTimer(grace)
+        self.face_missing_timer = GraceTimer(grace)
+        self.unknown_eye_timer = GraceTimer(grace)
+        self.ok_timer = GraceTimer(grace)
+        self.face_visible_since: float | None = None
+        self.camera_clear_since: float | None = None
+        self.perclos_history_start: float | None = None
+        self._recovery_cleared = False
 
     def reset(self) -> None:
         """Clear temporal state after a camera interruption or new clip."""
@@ -66,6 +104,16 @@ class DrowsinessMonitor:
         self.head_pitch = self.head_yaw = 0.0
         self.face_visible = True
         self.camera_clear = True
+        grace = float(self.cfg.get("timer_grace_seconds", TIMER_GRACE_SECONDS))
+        self.head_down_timer = GraceTimer(grace)
+        self.head_turn_timer = GraceTimer(grace)
+        self.face_missing_timer = GraceTimer(grace)
+        self.unknown_eye_timer = GraceTimer(grace)
+        self.ok_timer = GraceTimer(grace)
+        self.face_visible_since = None
+        self.camera_clear_since = None
+        self.perclos_history_start = None
+        self._recovery_cleared = False
 
     def update(self, t: float, eye_closed: bool | None, yawn: bool, *, face_visible: bool = True,
                head_pitch: float | None = None, head_yaw: float | None = None,
@@ -75,33 +123,31 @@ class DrowsinessMonitor:
             raise ValueError("timestamps must be non-decreasing")
         if self.session_start is None:
             self.session_start = t
+            self.perclos_history_start = t
         self.face_visible = face_visible
         self.camera_clear = camera_clear
-        if not face_visible:
-            if self.face_missing_since is None:
-                self.face_missing_since = t
+        if face_visible:
+            self.face_visible_since = self.face_visible_since if self.face_visible_since is not None else t
         else:
-            self.face_missing_since = None
-        if eye_closed is None and face_visible:
-            if self.unknown_eye_since is None:
-                self.unknown_eye_since = t
+            self.face_visible_since = None
+        if camera_clear:
+            self.camera_clear_since = self.camera_clear_since if self.camera_clear_since is not None else t
         else:
-            self.unknown_eye_since = None
+            self.camera_clear_since = None
+        self.face_missing_since = self.face_missing_timer.update(not face_visible, t)
+        unknown_condition = None if not face_visible else eye_closed is None
+        self.unknown_eye_since = self.unknown_eye_timer.update(unknown_condition, t)
         self.head_pitch = float(head_pitch or 0.0)
         self.head_yaw = float(head_yaw or 0.0)
-        if self.head_pitch >= self.cfg["head_down_angle_degrees"]:
-            if self.head_down_since is None:
-                self.head_down_since = t
-        else:
-            self.head_down_since = None
+        head_down_condition = (None if not face_visible or head_pitch is None
+                               else self.head_pitch >= self.cfg["head_down_angle_degrees"])
+        self.head_down_since = self.head_down_timer.update(head_down_condition, t)
         self.head_drop_since = self.head_down_since
         self.head_drop_active = (self.head_down_since is not None and
                                  t - self.head_down_since >= self.cfg["head_down_warning_seconds"])
-        if abs(self.head_yaw) >= self.cfg["head_turn_angle_degrees"]:
-            if self.head_turn_since is None:
-                self.head_turn_since = t
-        else:
-            self.head_turn_since = None
+        head_turn_condition = (None if not face_visible or head_yaw is None
+                               else abs(self.head_yaw) >= self.cfg["head_turn_angle_degrees"])
+        self.head_turn_since = self.head_turn_timer.update(head_turn_condition, t)
         eye_closed = None if eye_closed is None else bool(eye_closed)
         self.last_eye_state = eye_closed
         gap = self.cfg["closed_eye_gap_tolerance_seconds"]
@@ -145,6 +191,28 @@ class DrowsinessMonitor:
         self.risk_samples.append((t, possible_closed if possible_closed else (False if eye_closed is False else None)))
         self.last_t = t
         self._prune(t)
+        recovered = (eye_closed is False and face_visible and camera_clear
+                     and (head_pitch is None or self.head_pitch < self.cfg["head_down_angle_degrees"])
+                     and (head_yaw is None or abs(self.head_yaw) < self.cfg["head_turn_angle_degrees"]))
+        recovered_since = self.ok_timer.update(recovered, t)
+        if recovered_since is None:
+            self._recovery_cleared = False
+        elif (not self._recovery_cleared
+              and t - recovered_since >= self.cfg.get("recovery_clear_seconds", RECOVERY_CLEAR_SECONDS)):
+            self.samples.clear()
+            self.risk_samples.clear()
+            self.events.clear()
+            self.perclos_history_start = t
+            self.session_start = t
+            self.samples.append((t, eye_closed))
+            self.risk_samples.append((t, possible_closed if possible_closed else
+                                      (False if eye_closed is False else None)))
+            self.yawn_since = self.yawn_gap_since = None
+            self.yawn_counted = False
+            self.last_yawn_event = float("-inf")
+            self.current_state = "NORMAL"
+            self._reason = "No drowsiness signal"
+            self._recovery_cleared = True
 
     def _prune(self, now: float) -> None:
         cutoff = now - max(self.cfg["window_seconds"], self.cfg["yawn_window_seconds"])
@@ -193,6 +261,11 @@ class DrowsinessMonitor:
 
     def _reliable_perclos(self) -> float:
         """Return time-based PERCLOS without disabling it for low coverage."""
+        if self.last_t is None or self.perclos_history_start is None:
+            return 0.0
+        if self.last_t - self.perclos_history_start < self.cfg.get(
+                "perclos_min_history_seconds", PERCLOS_MIN_HISTORY_SECONDS):
+            return 0.0
         return self.perclos()
 
     def yawn_events(self) -> int:
@@ -235,74 +308,71 @@ class DrowsinessMonitor:
     def reason(self) -> str:
         return self._reason
 
+    def _set_result(self, state: str, reason: str) -> str:
+        """Set state and reason together so the overlay cannot contradict itself."""
+        assert reason != "No drowsiness signal" or state == "NORMAL"
+        self.current_state, self._reason = state, reason
+        return state
+
     def state(self) -> str:
         now = self.last_t or 0.0
         closed_seconds = now - self.eye_closed_since if self.eye_closed_since is not None else 0.0
         head_down_seconds = now - self.head_down_since if self.head_down_since is not None else 0.0
         if closed_seconds >= self.cfg["closed_eye_critical_seconds"]:
-            self._reason, self.current_state = "Eyes closed for critical duration", "CRITICAL"
-            return self.current_state
+            return self._set_result("CRITICAL", "Eyes closed for critical duration")
         if head_down_seconds >= self.cfg["head_down_critical_seconds"]:
-            self._reason, self.current_state = "Head-down posture for critical duration", "CRITICAL"
-            return self.current_state
-        if self.face_missing_since is not None and now - self.face_missing_since >= self.cfg["face_missing_warning_seconds"]:
-            self._reason, self.current_state = "Driver not found", "DRIVER_NOT_FOUND"
-            return self.current_state
+            return self._set_result("CRITICAL", "Head-down posture for critical duration")
+        face_returned = (self.face_visible_since is not None and
+                         now - self.face_visible_since >= self.cfg.get(
+                             "face_return_clear_seconds", FACE_RETURN_CLEAR_SECONDS))
+        if self.current_state == "DRIVER_NOT_FOUND" and not face_returned:
+            return self._set_result("DRIVER_NOT_FOUND", "Driver not found")
+        if (self.face_missing_since is not None
+                and now - self.face_missing_since >= self.cfg["face_missing_warning_seconds"]
+                and not face_returned):
+            return self._set_result("DRIVER_NOT_FOUND", "Driver not found")
         if not self.camera_clear:
-            self._reason, self.current_state = "Camera view is dark or unclear", "CAMERA_UNCLEAR"
-            return self.current_state
+            return self._set_result("CAMERA_UNCLEAR", "Camera view is dark or unclear")
+        camera_recovered = (self.camera_clear_since is not None and
+                            now - self.camera_clear_since >= self.cfg.get(
+                                "camera_clear_seconds", CAMERA_CLEAR_SECONDS))
+        if self.current_state == "CAMERA_UNCLEAR" and not camera_recovered:
+            return self._set_result("CAMERA_UNCLEAR", "Camera view is recovering")
         if closed_seconds >= self.cfg["closed_eye_warning_seconds"]:
-            self._reason, self.current_state = "Eyes closed too long", "DROWSY"
-            return self.current_state
+            return self._set_result("DROWSY", "Eyes closed too long")
         if head_down_seconds >= self.cfg["head_down_warning_seconds"]:
-            self._reason, self.current_state = "Head-down posture", "WARNING"
-            return self.current_state
+            return self._set_result("WARNING", "Head-down posture")
         if self.head_turn_since is not None and now - self.head_turn_since >= self.cfg["head_turn_warning_seconds"]:
-            self._reason, self.current_state = "Distracted - head turned", "WARNING"
-            return self.current_state
+            return self._set_result("WARNING", "Distracted - head turned")
         if self.unknown_eye_since is not None and now - self.unknown_eye_since >= self.cfg["unknown_eye_warning_seconds"]:
-            self._reason, self.current_state = "Eyes unclear while face is visible", "WARNING"
-            return self.current_state
+            return self._set_result("WARNING", "Eyes unclear while face is visible")
         if self.yawn_alert_active():
-            self._reason = "Repeated sustained yawns"
-            self.current_state = "DROWSY"
-            return self.current_state
+            return self._set_result("DROWSY", "Repeated sustained yawns")
         if self.head_drop_active:
-            self._reason = "Sustained downward face position"
-            self.current_state = "DROWSY"
-            return self.current_state
+            return self._set_result("DROWSY", "Sustained downward face position")
         if self.recent_yawn():
-            self._reason = "Sustained yawn detected"
-            self.current_state = "WARNING"
-            return self.current_state
+            return self._set_result("WARNING", "Sustained yawn detected")
 
         score = self.score()
         perclos = self._reliable_perclos()
-        if perclos >= self.cfg["perclos_drowsy"]:
-            self._reason, self.current_state = "PERCLOS above drowsy threshold", "DROWSY"
-            return self.current_state
-        if perclos >= self.cfg["perclos_warning"]:
-            self._reason, self.current_state = "PERCLOS above warning threshold", "WARNING"
-            return self.current_state
-        margin = self.cfg["hysteresis_margin"]
-        if self.current_state in {"DROWSY", "CRITICAL"}:
-            if score >= self.cfg["score_drowsy"] - margin or perclos >= self.cfg["perclos_drowsy"] - margin:
-                self.current_state = "DROWSY"
-                self._reason = "Elevated recent eye-closure rate"
-                return self.current_state
-            self.current_state = ("WARNING" if score >= self.cfg["score_warning"] - margin
-                                  or perclos >= self.cfg["perclos_warning"] - margin else "NORMAL")
-        elif self.current_state == "WARNING":
-            if score >= self.cfg["score_drowsy"] or perclos >= self.cfg["perclos_drowsy"]:
-                self.current_state = "DROWSY"
-            elif score < self.cfg["score_warning"] - margin and perclos < self.cfg["perclos_warning"] - margin:
-                self.current_state = "NORMAL"
-        elif score >= self.cfg["score_drowsy"] or perclos >= self.cfg["perclos_drowsy"]:
-            self.current_state = "DROWSY"
-        elif score >= self.cfg["score_warning"] or perclos >= self.cfg["perclos_warning"]:
-            self.current_state = "WARNING"
-        self._reason = ("Eyes not visible reliably" if self.eye_coverage() < self.cfg["minimum_eye_coverage"]
-                        else "Elevated eye-closure rate" if perclos >= self.cfg["perclos_warning"]
-                        else "Elevated drowsiness score" if score >= self.cfg["score_warning"]
-                        else "No drowsiness signal")
-        return self.current_state
+        previous = self.current_state
+        warning_enter = self.cfg.get("perclos_warning_enter", 0.25)
+        warning_exit = self.cfg.get("perclos_warning_exit", 0.15)
+        drowsy_enter = self.cfg.get("perclos_drowsy_enter", 0.35)
+        drowsy_exit = self.cfg.get("perclos_drowsy_exit", 0.25)
+        if previous in {"DROWSY", "CRITICAL"}:
+            if perclos >= drowsy_exit or score >= self.cfg["score_drowsy"] - self.cfg["hysteresis_margin"]:
+                return self._set_result("DROWSY", "Elevated recent eye-closure rate")
+            if perclos >= warning_exit or score >= self.cfg["score_warning"] - self.cfg["hysteresis_margin"]:
+                return self._set_result("WARNING", "Elevated recent drowsiness signal")
+        elif previous == "WARNING":
+            if perclos >= drowsy_enter or score >= self.cfg["score_drowsy"]:
+                return self._set_result("DROWSY", "Drowsiness signal above threshold")
+            if perclos >= warning_exit or score >= self.cfg["score_warning"] - self.cfg["hysteresis_margin"]:
+                return self._set_result("WARNING", "Elevated recent drowsiness signal")
+        else:
+            if perclos >= drowsy_enter or score >= self.cfg["score_drowsy"]:
+                return self._set_result("DROWSY", "PERCLOS or score above drowsy threshold")
+            if perclos >= warning_enter or score >= self.cfg["score_warning"]:
+                return self._set_result("WARNING", "PERCLOS or score above warning threshold")
+        return self._set_result("NORMAL", "No drowsiness signal")

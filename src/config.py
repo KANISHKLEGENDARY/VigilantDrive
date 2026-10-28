@@ -8,13 +8,29 @@ CLOSED_EYE_CRITICAL_SECONDS = 4.0
 UNKNOWN_EYE_WARNING_SECONDS = 1.0
 # Require stable evidence before changing the eye state.
 EYE_CLOSED_FRAME_COUNT = 3
-EYE_OPEN_FRAME_COUNT = 5
+EYE_OPEN_FRAME_COUNT = 3
 # Ignore a brief blink unless closed-eye evidence lasts at least this long.
 EYE_CLOSED_STABLE_SECONDS = 0.15
-EYE_OPEN_STABLE_SECONDS = 0.3
+EYE_OPEN_STABLE_SECONDS = 0.15
 # Alarm can clear only after all safe signals remain true for this long.
 SAFE_CLEAR_SECONDS = 2.0
 MINIMUM_ALARM_SECONDS = 3.0
+# Brief unsafe readings do not reset the alarm recovery timer.
+SAFE_GRACE_SECONDS = 0.3
+# Hold pose, face, and unknown-eye timers through short bad readings.
+TIMER_GRACE_SECONDS = 0.5
+# Clear stale eye/yawn history after this much recovered time.
+RECOVERY_CLEAR_SECONDS = 5.0
+# Continuous recovery required after face/camera signals return.
+FACE_RETURN_CLEAR_SECONDS = 0.5
+CAMERA_CLEAR_SECONDS = 1.0
+# Require this much PERCLOS history before it can affect the state.
+PERCLOS_MIN_HISTORY_SECONDS = 10.0
+# Separate enter/exit levels keep PERCLOS states from chattering.
+PERCLOS_WARNING_ENTER = 0.25
+PERCLOS_WARNING_EXIT = 0.15
+PERCLOS_DROWSY_ENTER = 0.35
+PERCLOS_DROWSY_EXIT = 0.25
 # Face and head-pose alert thresholds.
 FACE_MISSING_WARNING_SECONDS = 3.0
 HEAD_DOWN_ANGLE_DEGREES = 25.0
@@ -24,13 +40,22 @@ HEAD_TURN_ANGLE_DEGREES = 35.0
 HEAD_TURN_WARNING_SECONDS = 3.0
 # Landmark calibration and camera quality thresholds.
 CALIBRATION_SECONDS = 5.0
-MIN_CALIBRATION_FRAMES = 10
+MIN_CALIBRATION_FRAMES = 40
 MIN_CALIBRATION_EAR = 0.16
-EAR_CLOSED_BASELINE_FRACTION = 0.72
+EAR_CLOSED_BASELINE_FRACTION = 0.60
+EAR_SURE_CLOSED_FRACTION = 0.50
+EAR_MIN_OPEN_CALIBRATION = 0.18
+EAR_MAX_OPEN_CALIBRATION = 0.45
+CALIBRATION_MAX_PITCH_SPREAD = 10.0
+EAR_MAX_YAW_FOR_DECISION = 25.0
+PAIR_CLOSED_MIN_CONFIDENCE = 0.40
 MINIMUM_BRIGHTNESS = 30.0
 MINIMUM_SHARPNESS = 15.0
 # Run YOLO every second frame when configured for faster webcam processing.
 DEFAULT_INFERENCE_INTERVAL = 2
+# Encode one smaller review frame every few camera frames to reduce loop stalls.
+CLIP_FRAME_INTERVAL = 3
+CLIP_MAX_WIDTH = 640
 UNKNOWN_STATE_RESET_SECONDS = 1.0
 HEAD_DOWN_DIRECTION = -1.0
 CAMERA_LOST_ALARM_SECONDS = 2.0
@@ -67,15 +92,29 @@ DEFAULT_RUNTIME_CONFIG = {
     "unknown_eye_warning_seconds": UNKNOWN_EYE_WARNING_SECONDS,
     "closed_eye_warning_seconds": CLOSED_EYE_WARNING_SECONDS,
     "closed_eye_critical_seconds": CLOSED_EYE_CRITICAL_SECONDS,
+    "perclos_warning_enter": PERCLOS_WARNING_ENTER,
+    "perclos_warning_exit": PERCLOS_WARNING_EXIT,
+    "perclos_drowsy_enter": PERCLOS_DROWSY_ENTER,
+    "perclos_drowsy_exit": PERCLOS_DROWSY_EXIT,
+    "perclos_min_history_seconds": PERCLOS_MIN_HISTORY_SECONDS,
+    "ear_max_yaw_for_decision": EAR_MAX_YAW_FOR_DECISION,
+    "ear_closed_baseline_fraction": EAR_CLOSED_BASELINE_FRACTION,
+    "timer_grace_seconds": TIMER_GRACE_SECONDS,
+    "recovery_clear_seconds": RECOVERY_CLEAR_SECONDS,
+    "face_return_clear_seconds": FACE_RETURN_CLEAR_SECONDS,
+    "camera_clear_seconds": CAMERA_CLEAR_SECONDS,
     "face_missing_warning_seconds": FACE_MISSING_WARNING_SECONDS,
     "head_drop_weight": 0.1, "yawn_events_for_max": 3,
     "inference_interval_frames": DEFAULT_INFERENCE_INTERVAL,
+    "clip_frame_interval": CLIP_FRAME_INTERVAL,
+    "clip_max_width": CLIP_MAX_WIDTH,
 }
 # Alarm levels, their sound pattern, and the same message used on screen.
 ALERT_POLICIES = {
     "NORMAL": {"sound": "silent", "frequency": 0, "volume": 0.0, "repeat_seconds": 0.0,
                "message": "No drowsiness signal"},
     "WARNING": {"sound": "beep", "frequency": 880, "volume": 0.18, "repeat_seconds": 3.0,
+                "max_beeps": 2,
                 "message": "Warning - please stay alert"},
     "DROWSY": {"sound": "repeating", "frequency": 1040, "volume": 0.32, "repeat_seconds": 0.55,
                "message": "Drowsy - take a break"},
