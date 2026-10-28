@@ -2,7 +2,7 @@
 
 ## What this project does
 VigilantDrive uses a camera and a YOLO11 detector to look for closed eyes, open eyes, and yawns.
-It combines detections over time to display NORMAL, WARNING, or DROWSY and play an alarm for configured alert conditions.
+It combines detections over time to display NORMAL, WARNING, DROWSY, CRITICAL, DRIVER_NOT_FOUND, or CAMERA_UNCLEAR and play an alarm for configured alert conditions.
 This is a learning demo, not a certified or medically validated vehicle safety system.
 
 ## Run the webcam demo
@@ -21,7 +21,7 @@ py -3.11 -m venv .venv
 .\.venv\Scripts\python.exe realtime.py
 ```
 
-Press **Q** in the video window to quit and **D** to hide/show diagnostics. The checkpoint path and output folders are in `config.yaml`; numeric thresholds are in `src/config.py`. MediaPipe Face Mesh is added through `requirements.txt`. The demo uses the existing YOLO checkpoint without retraining it. For a video file, use `python realtime.py --source "path\to\clip.mp4"`.
+Press **Q** in the video window to quit, **D** to hide/show diagnostics, and **C** to restart calibration. Startup calibration waits for a visible face and enough valid samples; alerts are silent while calibration is in progress. The checkpoint path and output folders are in `config.yaml`; numeric thresholds are in `src/config.py`. MediaPipe Face Mesh is added through `requirements.txt`. The demo uses the existing YOLO checkpoint without retraining it. For a video file, use `python realtime.py --source "path\to\clip.mp4"`.
 
 ## Simple architecture
 
@@ -31,13 +31,13 @@ Press **Q** in the video window to quit and **D** to hide/show diagnostics. The 
 4. `src/eye_logic.py` combines YOLO and eye aspect ratio (EAR) and rejects brief frame-level changes.
 5. `src/drowsiness.py` calculates time-based PERCLOS and maps eye, yawn, visibility, and head-pose signals to one state.
 6. `src/alarm.py` maps that same state to sound patterns on a separate thread.
-7. `src/metrics.py` writes eye/head values, alert state, FPS, and frame time to a CSV under `results/`.
+7. `src/metrics.py` writes eye/head values, alert state, FPS, total frame time, and capture/face-mesh/YOLO/JPEG/draw/display stage times to a CSV under `results/`.
 
 The largest visible face is only a driver proxy, not identity tracking. When face landmarks are unavailable, the app ignores whole-frame eye/yawn detections and raises a driver-not-found alert after the configured delay.
 
 ## How the alarm works
 
-Thresholds and alarm patterns are listed in [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) and configured in `src/config.py`. The visible state is the same state used to choose the alarm pattern. It holds the alert until the face is visible, eyes are open, the image is clear, and the head is up for the required time. These are prototype settings, not validated medical thresholds.
+Thresholds and alarm patterns are listed in [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md) and configured in `src/config.py`. A plain-language explanation of fixes B1–B13, state transitions, checks, and remaining limits is in [docs/EXPLAINED.md](docs/EXPLAINED.md). The visible state is the same state used to choose the alarm pattern. It holds the alert until the face is visible, eyes are open, the image is clear, and the head is up for the required time. These are prototype settings, not validated medical thresholds.
 
 ## Evaluation and data checks
 
@@ -53,7 +53,7 @@ When the demo saves a review clip, it writes an overlay version and a clean vers
 
 - The largest face is a driver proxy, not driver identification. More than one person, occlusion, and camera movement can still confuse it.
 - EAR and head angles are landmark estimates, not validated medical or vehicle-approved measurements. Camera orientation and calibration affect them; check the displayed angle direction on your own camera.
-- Startup calibration uses about five seconds of open-eye, forward-facing measurements. It waits if it cannot collect enough valid samples.
+- Startup calibration uses at least 40 valid open-eye, forward-facing samples over about five seconds. Press **C** to recalibrate.
 - Dark/blur checks use simple brightness and sharpness rules. Glasses, sunglasses, night lighting, camera placement, and face angles still need testing.
 - The app does not use vehicle speed or GPS. Its head-pose logic is a prototype and has not been validated across drivers.
 - Object-detection mAP does not show whether drowsiness alerts are caught reliably or how often false alarms occur.
