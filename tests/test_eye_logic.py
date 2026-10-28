@@ -15,29 +15,46 @@ def test_three_closed_frames_are_needed_to_close():
     assert eyes.update(True, 0.2) is True
 
 
+def test_brief_normal_blink_does_not_start_closed_eye_timer():
+    eyes = EyeDebouncer()
+    for now in (0.0, 0.1, 0.2, 0.3, 0.4):
+        eyes.update(False, now)
+    assert eyes.state is False
+    for now in (0.5, 0.55, 0.6):
+        assert eyes.update(True, now) is False
+    assert eyes.update(False, 0.65) is False
+
+
+def test_sustained_close_still_becomes_closed_after_minimum_duration():
+    eyes = EyeDebouncer()
+    for now in (0.0, 0.05, 0.10):
+        assert eyes.update(True, now) is None
+    assert eyes.update(True, 0.15) is True
+
+
 def test_one_wrong_open_frame_does_not_reopen_closed_eyes():
     eyes = EyeDebouncer()
-    for index in range(3):
-        eyes.update(True, index / 30)
-    assert eyes.update(False, 0.1) is True
-    assert eyes.update(True, 0.2) is True
+    for now in (0.0, 0.1, 0.2):
+        eyes.update(True, now)
+    assert eyes.update(False, 0.21) is True
+    assert eyes.update(True, 0.22) is True
 
 
 def test_five_open_frames_and_stable_time_are_needed_to_reopen():
     eyes = EyeDebouncer()
-    for index in range(3):
-        eyes.update(True, index / 30)
-    for now in (0.2, 0.27, 0.34, 0.41):
+    for now in (0.0, 0.1, 0.2):
+        eyes.update(True, now)
+    for now in (0.21, 0.28, 0.35, 0.42):
         assert eyes.update(False, now) is True
     assert eyes.update(False, 0.51) is False
 
 
 def test_unknown_state_resets_after_one_second_without_claiming_open():
     eyes = EyeDebouncer()
-    for index in range(3):
-        eyes.update(True, index / 30)
-    assert eyes.update(None, 0.2) is True
-    assert eyes.update(None, 1.21) is None
+    for now in (0.0, 0.1, 0.2):
+        eyes.update(True, now)
+    assert eyes.update(None, 0.3) is True
+    assert eyes.update(None, 1.31) is None
 
 
 def test_ear_closed_threshold_is_relative_to_calibration():

@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from src.config import (EYE_CLOSED_FRAME_COUNT, EYE_OPEN_FRAME_COUNT,
-                        EYE_OPEN_STABLE_SECONDS, EAR_CLOSED_BASELINE_FRACTION)
+                        EYE_CLOSED_STABLE_SECONDS, EYE_OPEN_STABLE_SECONDS,
+                        EAR_CLOSED_BASELINE_FRACTION)
 from src.config import UNKNOWN_STATE_RESET_SECONDS
 
 
@@ -19,10 +20,12 @@ class EyeDebouncer:
     """Keep eye state steady across brief misses and single wrong detections."""
     def __init__(self, closed_frames: int = EYE_CLOSED_FRAME_COUNT,
                  open_frames: int = EYE_OPEN_FRAME_COUNT,
-                 open_seconds: float = EYE_OPEN_STABLE_SECONDS):
+                 open_seconds: float = EYE_OPEN_STABLE_SECONDS,
+                 closed_seconds: float = EYE_CLOSED_STABLE_SECONDS):
         self.closed_frames = closed_frames
         self.open_frames = open_frames
         self.open_seconds = open_seconds
+        self.closed_seconds = closed_seconds
         self.state: bool | None = None
         self.candidate: bool | None = None
         self.candidate_frames = 0
@@ -49,8 +52,8 @@ class EyeDebouncer:
             self.candidate_frames += 1
         required_frames = self.closed_frames if candidate else self.open_frames
         elapsed = now - self.candidate_since if self.candidate_since is not None else 0.0
-        stable_open = candidate or elapsed >= self.open_seconds
-        if self.candidate_frames >= required_frames and stable_open:
+        stable_duration = elapsed >= (self.closed_seconds if candidate else self.open_seconds)
+        if self.candidate_frames >= required_frames and stable_duration:
             self.state = candidate
         return self.state
 

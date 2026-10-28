@@ -17,7 +17,7 @@ from src.metrics import Metrics
 from src.config import (ALERT_POLICIES, CAMERA_LOST_ALARM_SECONDS, DEFAULT_INFERENCE_INTERVAL,
                         DEFAULT_RUNTIME_CONFIG,
                         HEAD_DOWN_DIRECTION, MINIMUM_BRIGHTNESS, MINIMUM_SHARPNESS,
-                        OVERLAY_FONT_SCALE, CALIBRATION_SECONDS)
+                        OVERLAY_FONT_SCALE, OVERLAY_SMOOTHING_ALPHA, CALIBRATION_SECONDS)
 from src.eye_logic import EyeDebouncer, combine_eye_signals, ear_says_closed
 from src.face_signals import FaceCalibration, FaceSignalExtractor, angle_delta
 
@@ -29,6 +29,14 @@ def put_text_fit(frame, text: str, y: int, color, font_scale: float = OVERLAY_FO
     while scale > 0.25 and cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, 1)[0][0] > available_width:
         scale -= 0.025
     cv2.putText(frame, text, (18, y), cv2.FONT_HERSHEY_SIMPLEX, scale, color, 1)
+
+
+def smooth_display(previous: float | None, current: float) -> float:
+    """Reduce visual jitter without changing the values used by alert logic."""
+    if previous is None:
+        return current
+    alpha = OVERLAY_SMOOTHING_ALPHA
+    return alpha * current + (1.0 - alpha) * previous
 
 
 def load_config(config_path: Path) -> tuple[dict, Path]:
@@ -121,6 +129,7 @@ def main() -> None:
     clip_bytes = 0
     alert_starts: deque[float] = deque()
     last_alarm_active = False
+    display_pitch = display_yaw = display_fps = display_frame_ms = display_yolo_ms = None
     lost_since: float | None = None
     last_frame = np.zeros((480, 640, 3), dtype=np.uint8)
     capture_enabled = bool(cfg.get("false_alarm_capture_enabled", True))
@@ -225,6 +234,11 @@ def main() -> None:
                                  detector.last_latency_ms, monitor.eye_status(), display_reason, alarm_active,
                                  monitor.eye_coverage(), monitor.head_drop_active, ear,
                                  pitch_delta, yaw_delta, state, frame_ms)
+            display_pitch = smooth_display(display_pitch, pitch_delta)
+            display_yaw = smooth_display(display_yaw, yaw_delta)
+            display_fps = smooth_display(display_fps, fps)
+            display_frame_ms = smooth_display(display_frame_ms, frame_ms)
+            display_yolo_ms = smooth_display(display_yolo_ms, detector.last_latency_ms)
             color = {"NORMAL": (50, 200, 50), "WARNING": (0, 180, 255), "DROWSY": (0, 0, 255),
                      "CRITICAL": (0, 0, 255), "DRIVER_NOT_FOUND": (0, 180, 255),
                      "CAMERA_UNCLEAR": (0, 180, 255)}[state]
@@ -233,8 +247,8 @@ def main() -> None:
             put_text_fit(frame, ALERT_POLICIES[state]["message"], 49, color)
             if debug_enabled:
                 put_text_fit(frame, f"Eyes: {monitor.eye_status()}  EAR: {ear if ear is not None else 'n/a'}  PERCLOS: {monitor.perclos():.2f}", 73, (245, 245, 245))
-                put_text_fit(frame, f"Head pitch: {pitch_delta:.1f} deg  Head turn: {yaw_delta:.1f} deg  Yawns: {monitor.yawn_events()}", 97, (245, 245, 245))
-                put_text_fit(frame, f"FPS: {fps:.1f}  Frame: {frame_ms:.1f} ms  YOLO: {detector.last_latency_ms:.1f} ms  Eye coverage: {monitor.eye_coverage():.0%}", 121, (245, 245, 245))
+                put_text_fit(frame, f"Head pitch: {display_pitch:.1f} deg  Head turn: {display_yaw:.1f} deg  Yawns: {monitor.yawn_events()}", 97, (245, 245, 245))
+                put_text_fit(frame, f"FPS: {display_fps:.1f}  Frame: {display_frame_ms:.1f} ms  YOLO: {display_yolo_ms:.1f} ms  Eye coverage: {monitor.eye_coverage():.0%}", 121, (245, 245, 245))
                 camera_label = "CLEAR" if camera_clear else "DARK / BLURRED"
                 put_text_fit(frame, f"Camera: {camera_label}  Calibration: {'READY' if calibrated else 'LOOK FORWARD, EYES OPEN'}", 145, (245, 245, 245))
             if active_face_box is not None:

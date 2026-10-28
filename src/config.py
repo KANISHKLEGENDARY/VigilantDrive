@@ -9,6 +9,8 @@ UNKNOWN_EYE_WARNING_SECONDS = 1.0
 # Require stable evidence before changing the eye state.
 EYE_CLOSED_FRAME_COUNT = 3
 EYE_OPEN_FRAME_COUNT = 5
+# Ignore a brief blink unless closed-eye evidence lasts at least this long.
+EYE_CLOSED_STABLE_SECONDS = 0.15
 EYE_OPEN_STABLE_SECONDS = 0.3
 # Alarm can clear only after all safe signals remain true for this long.
 SAFE_CLEAR_SECONDS = 2.0
@@ -33,6 +35,8 @@ UNKNOWN_STATE_RESET_SECONDS = 1.0
 HEAD_DOWN_DIRECTION = -1.0
 CAMERA_LOST_ALARM_SECONDS = 2.0
 OVERLAY_FONT_SCALE = 0.5
+# Smooth only displayed measurements; alert decisions still use raw readings.
+OVERLAY_SMOOTHING_ALPHA = 0.2
 AUDIO_SAMPLE_RATE = 22050
 AUDIO_TONE_SECONDS = 0.22
 AUDIO_FADE_SECONDS = 0.015
