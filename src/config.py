@@ -42,7 +42,10 @@ HEAD_TURN_WARNING_SECONDS = 3.0
 CALIBRATION_SECONDS = 5.0
 MIN_CALIBRATION_FRAMES = 40
 MIN_CALIBRATION_EAR = 0.16
-EAR_CLOSED_BASELINE_FRACTION = 0.60
+# EAR below this fraction of the open baseline is treated as closed.
+EAR_CLOSED_BASELINE_FRACTION = 0.70
+# Below this open-eye baseline fraction, strong two-eye YOLO closure may override EAR.
+YOLO_OVERRIDE_EAR_FRACTION = 0.85
 EAR_SURE_CLOSED_FRACTION = 0.50
 EAR_MIN_OPEN_CALIBRATION = 0.18
 EAR_MAX_OPEN_CALIBRATION = 0.45
@@ -57,7 +60,10 @@ DEFAULT_INFERENCE_INTERVAL = 2
 CLIP_FRAME_INTERVAL = 3
 CLIP_MAX_WIDTH = 640
 UNKNOWN_STATE_RESET_SECONDS = 1.0
-HEAD_DOWN_DIRECTION = -1.0
+# Multiplier that makes positive calibrated pitch mean chin down on the demo camera.
+HEAD_DOWN_DIRECTION = 1.0
+# Silence history-only PERCLOS alerts after the driver has recovered for this long.
+PERCLOS_SAFE_CLEAR_SECONDS = 2.0
 CAMERA_LOST_ALARM_SECONDS = 2.0
 OVERLAY_FONT_SCALE = 0.5
 # Smooth only displayed measurements; alert decisions still use raw readings.
@@ -97,8 +103,10 @@ DEFAULT_RUNTIME_CONFIG = {
     "perclos_drowsy_enter": PERCLOS_DROWSY_ENTER,
     "perclos_drowsy_exit": PERCLOS_DROWSY_EXIT,
     "perclos_min_history_seconds": PERCLOS_MIN_HISTORY_SECONDS,
+    "perclos_safe_clear_seconds": PERCLOS_SAFE_CLEAR_SECONDS,
     "ear_max_yaw_for_decision": EAR_MAX_YAW_FOR_DECISION,
     "ear_closed_baseline_fraction": EAR_CLOSED_BASELINE_FRACTION,
+    "yolo_override_ear_fraction": YOLO_OVERRIDE_EAR_FRACTION,
     "timer_grace_seconds": TIMER_GRACE_SECONDS,
     "recovery_clear_seconds": RECOVERY_CLEAR_SECONDS,
     "face_return_clear_seconds": FACE_RETURN_CLEAR_SECONDS,
