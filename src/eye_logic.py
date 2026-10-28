@@ -3,17 +3,23 @@ from __future__ import annotations
 
 from src.config import (EYE_CLOSED_FRAME_COUNT, EYE_OPEN_FRAME_COUNT,
                         EYE_CLOSED_STABLE_SECONDS, EYE_OPEN_STABLE_SECONDS,
-                        EAR_CLOSED_BASELINE_FRACTION)
+                        EAR_CLOSED_BASELINE_FRACTION, EAR_SURE_CLOSED_FRACTION,
+                        EAR_MAX_YAW_FOR_DECISION)
 from src.config import UNKNOWN_STATE_RESET_SECONDS
 
 
-def combine_eye_signals(yolo_closed: bool | None, ear_closed: bool | None) -> bool | None:
-    """Treat either reliable closed cue as closed; use open only when observed."""
-    if yolo_closed is True or ear_closed is True:
+def combine_eye_signals(yolo_closed: bool | None, ear_closed: bool | None,
+                        ear_sure_closed: bool = False) -> bool | None:
+    """Use strong EAR as decisive, and require YOLO to confirm borderline EAR."""
+    if ear_sure_closed:
         return True
-    if yolo_closed is False or ear_closed is False:
+    if ear_closed is False:
         return False
-    return None
+    if ear_closed is None:
+        return yolo_closed
+    if yolo_closed is False:
+        return None
+    return True
 
 
 class EyeDebouncer:
@@ -70,3 +76,14 @@ def ear_says_closed(ear: float | None, baseline: float | None) -> bool | None:
     if ear is None or baseline is None:
         return None
     return ear < baseline * EAR_CLOSED_BASELINE_FRACTION
+
+
+def ear_is_surely_closed(ear: float | None, baseline: float | None) -> bool:
+    """Identify a strongly closed eye even if YOLO disagrees."""
+    return (ear is not None and baseline is not None
+            and ear < baseline * EAR_SURE_CLOSED_FRACTION)
+
+
+def ear_is_usable_at_yaw(yaw_delta: float, max_yaw: float = EAR_MAX_YAW_FOR_DECISION) -> bool:
+    """Avoid using EAR when a sideways turn makes one eye measurement unreliable."""
+    return abs(yaw_delta) <= max_yaw

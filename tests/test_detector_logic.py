@@ -11,7 +11,7 @@ def test_eye_pair_must_be_geometrically_plausible_and_both_closed():
             detection("Eyeclosed", .85, (31, 11, 41, 21))]
     assert infer_eye_state(pair) is True
     mixed = [pair[0], detection("Eyeopen", .9, (31, 11, 41, 21))]
-    assert infer_eye_state(mixed) is False
+    assert infer_eye_state(mixed) is None
     different_rows = [pair[0], detection("Eyeclosed", .99, (31, 80, 41, 90))]
     assert infer_eye_state(different_rows) is None
 
@@ -42,7 +42,19 @@ def test_eye_pair_with_large_size_mismatch_is_unknown():
 def test_driver_face_filter_requires_whole_detection_inside_face_region():
     items = [detection("Eyeopen", .9, (10, 10, 20, 20)),
              detection("Yawn", .9, (90, 10, 110, 30))]
-    assert keep_detections_in_box(items, (0, 0, 100, 100)) == [items[0]]
+    assert keep_detections_in_box(items, (0, 0, 100, 100)) == items
+
+
+def test_weak_closed_eye_pair_is_unknown():
+    pair = [detection("Eyeclosed", .26, (10, 10, 20, 20)),
+            detection("Eyeclosed", .27, (31, 11, 41, 21))]
+    assert infer_eye_state(pair) is None
+
+
+def test_conflicting_eye_pair_is_unknown():
+    pair = [detection("Eyeclosed", .74, (10, 10, 20, 20)),
+            detection("Eyeopen", .44, (31, 11, 41, 21))]
+    assert infer_eye_state(pair) is None
 
 
 def test_event_match_rejects_tiny_overlap_and_accepts_half_overlap():

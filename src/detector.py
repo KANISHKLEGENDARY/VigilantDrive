@@ -1,6 +1,7 @@
 """Ultralytics adapter plus conservative interpretation of eye detections."""
 from __future__ import annotations
 import time
+from src.config import PAIR_CLOSED_MIN_CONFIDENCE
 
 
 class Detector:
@@ -32,6 +33,7 @@ class Detector:
             import torch
             device = "0" if torch.cuda.is_available() else "cpu"
         self.device, self.conf, self.iou = device, conf, iou
+        print(f"Detector device: {self.device}")
         self.imgsz, self.half = int(imgsz), bool(half and str(device) != "cpu")
         self.class_confidence = class_confidence or {}
         self.inference_conf = min([conf, *self.class_confidence.values()])
@@ -61,7 +63,8 @@ class Detector:
 
 
 def infer_eye_state(detections, single_eye_closed_confidence: float = 0.90,
-                    max_eye_size_ratio: float = 2.0) -> bool | None:
+                    max_eye_size_ratio: float = 2.0,
+                    pair_closed_min_confidence: float = PAIR_CLOSED_MIN_CONFIDENCE) -> bool | None:
     """Return closed/open/unknown using distinct eye boxes, not any closed box.
 
     Conflicting same-location class predictions are deduplicated. Two visible
@@ -106,7 +109,13 @@ def infer_eye_state(detections, single_eye_closed_confidence: float = 0.90,
                 pairs.append((first_conf + second_conf, first, second))
     if pairs:
         _, first, second = max(pairs, key=lambda item: item[0])
-        return first[0] == "Eyeclosed" and second[0] == "Eyeclosed"
+        if first[0] != second[0]:
+            return None
+        if first[0] == "Eyeopen":
+            return False
+        if min(first[1], second[1]) >= pair_closed_min_confidence:
+            return True
+        return None
     if len(distinct) == 1:
         if distinct[0][0] == "Eyeopen":
             return False
@@ -151,8 +160,8 @@ def keep_detections_in_box(detections, box):
         return detections
     x1, y1, x2, y2 = box
     return [item for item in detections
-            if x1 <= item[2][0] and y1 <= item[2][1]
-            and item[2][2] <= x2 and item[2][3] <= y2]
+            if x1 <= (item[2][0] + item[2][2]) / 2 <= x2
+            and y1 <= (item[2][1] + item[2][3]) / 2 <= y2]
 
 
 def keep_driver_region(detections, frame_shape, roi):
