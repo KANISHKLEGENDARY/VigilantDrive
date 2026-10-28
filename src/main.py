@@ -246,7 +246,8 @@ def main() -> None:
             put_text_fit(frame, f"{state} | {display_reason}", 25, color, .58)
             put_text_fit(frame, ALERT_POLICIES[state]["message"], 49, color)
             if debug_enabled:
-                put_text_fit(frame, f"Eyes: {monitor.eye_status()}  EAR: {ear if ear is not None else 'n/a'}  PERCLOS: {monitor.perclos():.2f}", 73, (245, 245, 245))
+                ear_display = f"{ear:.2f}" if ear is not None else "n/a"
+                put_text_fit(frame, f"Eyes: {monitor.eye_status()}  EAR: {ear_display}  PERCLOS: {monitor.perclos():.2f}", 73, (245, 245, 245))
                 put_text_fit(frame, f"Head pitch: {display_pitch:.1f} deg  Head turn: {display_yaw:.1f} deg  Yawns: {monitor.yawn_events()}", 97, (245, 245, 245))
                 put_text_fit(frame, f"FPS: {display_fps:.1f}  Frame: {display_frame_ms:.1f} ms  YOLO: {display_yolo_ms:.1f} ms  Eye coverage: {monitor.eye_coverage():.0%}", 121, (245, 245, 245))
                 camera_label = "CLEAR" if camera_clear else "DARK / BLURRED"
