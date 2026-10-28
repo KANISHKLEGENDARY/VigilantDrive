@@ -4,22 +4,21 @@ from __future__ import annotations
 from src.config import (EYE_CLOSED_FRAME_COUNT, EYE_OPEN_FRAME_COUNT,
                         EYE_CLOSED_STABLE_SECONDS, EYE_OPEN_STABLE_SECONDS,
                         EAR_CLOSED_BASELINE_FRACTION, EAR_SURE_CLOSED_FRACTION,
-                        EAR_MAX_YAW_FOR_DECISION)
+                        EAR_MAX_YAW_FOR_DECISION, YOLO_OVERRIDE_EAR_FRACTION)
 from src.config import UNKNOWN_STATE_RESET_SECONDS
 
 
 def combine_eye_signals(yolo_closed: bool | None, ear_closed: bool | None,
-                        ear_sure_closed: bool = False) -> bool | None:
-    """Use strong EAR as decisive, and require YOLO to confirm borderline EAR."""
-    if ear_sure_closed:
-        return True
-    if ear_closed is False:
-        return False
+                        ear_sure_closed: bool = False,
+                        ear_yolo_override: bool = False) -> bool | None:
+    """Fuse eye evidence; strong paired YOLO may confirm borderline EAR."""
     if ear_closed is None:
         return yolo_closed
-    if yolo_closed is False:
-        return None
-    return True
+    if ear_sure_closed or ear_closed:
+        return None if yolo_closed is False else True
+    if ear_yolo_override and yolo_closed is True:
+        return True
+    return False
 
 
 class EyeDebouncer:
@@ -82,6 +81,14 @@ def ear_is_surely_closed(ear: float | None, baseline: float | None) -> bool:
     """Identify a strongly closed eye even if YOLO disagrees."""
     return (ear is not None and baseline is not None
             and ear < baseline * EAR_SURE_CLOSED_FRACTION)
+
+
+def ear_allows_yolo_override(ear: float | None, baseline: float | None) -> bool:
+    """Mark EAR between its closure cutoff and the strong-open boundary."""
+    if ear is None or baseline is None:
+        return False
+    return (baseline * EAR_CLOSED_BASELINE_FRACTION <= ear
+            < baseline * YOLO_OVERRIDE_EAR_FRACTION)
 
 
 def ear_is_usable_at_yaw(yaw_delta: float, max_yaw: float = EAR_MAX_YAW_FOR_DECISION) -> bool:

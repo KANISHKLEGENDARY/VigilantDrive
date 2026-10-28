@@ -20,7 +20,8 @@ from src.config import (ALERT_POLICIES, CAMERA_LOST_ALARM_SECONDS, CLIP_FRAME_IN
                         EAR_MAX_YAW_FOR_DECISION, HEAD_DOWN_DIRECTION,
                         MINIMUM_BRIGHTNESS, MINIMUM_SHARPNESS,
                         OVERLAY_FONT_SCALE, OVERLAY_SMOOTHING_ALPHA, CALIBRATION_SECONDS)
-from src.eye_logic import (EyeDebouncer, combine_eye_signals, ear_is_surely_closed,
+from src.eye_logic import (EyeDebouncer, combine_eye_signals,
+                           ear_allows_yolo_override, ear_is_surely_closed,
                            ear_is_usable_at_yaw, ear_says_closed)
 from src.face_signals import FaceCalibration, FaceSignalExtractor, angle_delta
 
@@ -218,6 +219,7 @@ def main() -> None:
             pitch_delta = 0.0
             yaw_delta = 0.0
             if calibrated and face_measurement is not None and not args.no_calibration:
+                # This multiplier makes positive pitch mean chin down on this camera.
                 pitch_delta = angle_delta(face_measurement.pitch_degrees, calibration.pitch_baseline) * HEAD_DOWN_DIRECTION
                 yaw_delta = angle_delta(face_measurement.yaw_degrees, calibration.yaw_baseline)
             ear_usable = ear_is_usable_at_yaw(
@@ -226,7 +228,10 @@ def main() -> None:
                           if calibrated and not args.no_calibration and ear_usable else None)
             ear_sure_closed = (ear_is_surely_closed(ear, calibration.ear_baseline)
                                if calibrated and not args.no_calibration and ear_usable else False)
-            eye_candidate = combine_eye_signals(yolo_eye_state, ear_closed, ear_sure_closed)
+            ear_yolo_override = (ear_allows_yolo_override(ear, calibration.ear_baseline)
+                                 if calibrated and not args.no_calibration and ear_usable else False)
+            eye_candidate = combine_eye_signals(yolo_eye_state, ear_closed, ear_sure_closed,
+                                                ear_yolo_override)
             eye_state = eye_debouncer.update(eye_candidate, t)
             if calibrated and not args.no_calibration and not calibration_reported:
                 cutoff = calibration.ear_baseline * cfg.get("ear_closed_baseline_fraction", 0.60)
@@ -278,7 +283,7 @@ def main() -> None:
                               if ear_baseline is not None else None)
                 cutoff_display = f"/{ear_cutoff:.2f}" if ear_cutoff is not None else ""
                 put_text_fit(frame, f"Eyes: {monitor.eye_status()}  EAR: {ear_display}{cutoff_display}  PERCLOS: {monitor.perclos():.2f}", 73, (245, 245, 245))
-                put_text_fit(frame, f"Head pitch: {display_pitch:.1f} deg  Head turn: {display_yaw:.1f} deg  Yawns: {monitor.yawn_events()}", 97, (245, 245, 245))
+                put_text_fit(frame, f"Head pitch (+ = down): {display_pitch:.1f} deg  Head turn: {display_yaw:.1f} deg  Yawns: {monitor.yawn_events()}", 97, (245, 245, 245))
                 put_text_fit(frame, f"FPS: {display_fps:.1f}  Frame: {display_frame_ms:.1f} ms  YOLO: {display_yolo_ms:.1f} ms  Eye coverage: {monitor.eye_coverage():.0%}", 121, (245, 245, 245))
                 camera_label = "CLEAR" if camera_clear else "DARK / BLURRED"
                 if calibrated:

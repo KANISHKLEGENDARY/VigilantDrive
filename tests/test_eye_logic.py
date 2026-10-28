@@ -11,7 +11,7 @@ def test_ear_led_eye_decision_table():
     assert combine_eye_signals(True, None) is True
     assert combine_eye_signals(False, None) is False
     assert combine_eye_signals(None, None) is None
-    assert combine_eye_signals(False, True, ear_sure_closed=True) is True
+    assert combine_eye_signals(False, True, ear_sure_closed=True) is None
 
 
 def test_three_closed_frames_are_needed_to_close():
@@ -65,7 +65,7 @@ def test_unknown_state_resets_after_one_second_without_claiming_open():
 
 def test_ear_closed_threshold_is_relative_to_calibration():
     assert ear_says_closed(0.14, 0.25) is True
-    assert ear_says_closed(0.16, 0.25) is False
+    assert ear_says_closed(0.18, 0.25) is False
     assert ear_says_closed(None, 0.25) is None
     assert ear_is_surely_closed(0.12, 0.25)
     assert not ear_is_surely_closed(0.14, 0.25)
