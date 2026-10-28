@@ -104,7 +104,8 @@ class Alarm:
                 beeps_played += 1
                 next_tone = now + policy["repeat_seconds"]
 
-    def update(self, state: str, t: float, safe_to_clear: bool = False) -> str:
+    def update(self, state: str, t: float, safe_to_clear: bool = False,
+               allow_early_clear: bool = False) -> str:
         """Return the actual alarm state; this same value is shown on screen."""
         if state not in ALERT_POLICIES:
             raise ValueError(f"Unknown alert state: {state}")
@@ -128,7 +129,7 @@ class Alarm:
                     self._unsafe_since = None
             minimum_elapsed = self._started_at is not None and t - self._started_at >= self.minimum_alarm_seconds
             safe_elapsed = self._safe_since is not None and t - self._safe_since >= self.open_clear_seconds
-            if minimum_elapsed and safe_elapsed:
+            if safe_elapsed and (minimum_elapsed or (allow_early_clear and state == "NORMAL")):
                 self._set_state(state)
                 self._started_at = None if state == "NORMAL" else t
                 self._safe_since = None

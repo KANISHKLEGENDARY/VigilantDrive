@@ -20,6 +20,15 @@ def test_state_cannot_clear_before_minimum_duration_and_safe_window():
     alarm.close()
 
 
+def test_perclos_recovery_can_clear_after_two_safe_seconds_before_minimum_hold():
+    alarm = Alarm(open_clear_seconds=2.0, minimum_alarm_seconds=3.0, audio_enabled=False)
+    assert alarm.update("DROWSY", 0.0) == "DROWSY"
+    assert alarm.update("NORMAL", 0.5, safe_to_clear=True) == "DROWSY"
+    assert alarm.update("NORMAL", 2.5, safe_to_clear=True,
+                        allow_early_clear=True) == "NORMAL"
+    alarm.close()
+
+
 def test_a_drowsy_alarm_does_not_drop_to_warning_on_one_safe_frame():
     alarm = Alarm(audio_enabled=False)
     assert alarm.update("DROWSY", 0.0) == "DROWSY"

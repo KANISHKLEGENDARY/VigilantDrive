@@ -247,7 +247,8 @@ def main() -> None:
             safe_to_clear = (calibrated and face_visible and camera_clear and eye_state is False
                              and pitch_delta < cfg["head_down_angle_degrees"]
                              and abs(yaw_delta) < cfg["head_turn_angle_degrees"])
-            state = alarm.update(incoming_state, t, safe_to_clear=safe_to_clear)
+            state = alarm.update(incoming_state, t, safe_to_clear=safe_to_clear,
+                                 allow_early_clear=monitor.perclos_recovery_suppressed)
             alarm_active = state != "NORMAL"
             display_reason = ("Calibrating - look forward with eyes open" if not calibrated else
                               monitor.reason() if state == incoming_state

@@ -317,6 +317,11 @@ class DrowsinessMonitor:
     def reason(self) -> str:
         return self._reason
 
+    @property
+    def perclos_recovery_suppressed(self) -> bool:
+        """Tell the alarm that a history-only alert has completed recovery."""
+        return self._perclos_recovery_suppressed
+
     def _set_result(self, state: str, reason: str, *, perclos_only: bool = False) -> str:
         """Set state and reason together so the overlay cannot contradict itself."""
         assert reason != "No drowsiness signal" or state == "NORMAL"
