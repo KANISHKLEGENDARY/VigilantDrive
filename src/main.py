@@ -14,11 +14,14 @@ from src.detector import (Detector, expand_face_box, infer_eye_state,
                           keep_detections_in_box, keep_driver_region)
 from src.drowsiness import DrowsinessMonitor
 from src.metrics import Metrics
-from src.config import (ALERT_POLICIES, CAMERA_LOST_ALARM_SECONDS, DEFAULT_INFERENCE_INTERVAL,
+from src.config import (ALERT_POLICIES, CAMERA_LOST_ALARM_SECONDS, CLIP_FRAME_INTERVAL,
+                        CLIP_MAX_WIDTH, DEFAULT_INFERENCE_INTERVAL,
                         DEFAULT_RUNTIME_CONFIG,
-                        HEAD_DOWN_DIRECTION, MINIMUM_BRIGHTNESS, MINIMUM_SHARPNESS,
+                        EAR_MAX_YAW_FOR_DECISION, HEAD_DOWN_DIRECTION,
+                        MINIMUM_BRIGHTNESS, MINIMUM_SHARPNESS,
                         OVERLAY_FONT_SCALE, OVERLAY_SMOOTHING_ALPHA, CALIBRATION_SECONDS)
-from src.eye_logic import EyeDebouncer, combine_eye_signals, ear_says_closed
+from src.eye_logic import (EyeDebouncer, combine_eye_signals, ear_is_surely_closed,
+                           ear_is_usable_at_yaw, ear_says_closed)
 from src.face_signals import FaceCalibration, FaceSignalExtractor, angle_delta
 
 
@@ -110,6 +113,7 @@ def main() -> None:
     face_extractor = FaceSignalExtractor()
     calibration = FaceCalibration(float(cfg.get("calibration_seconds", CALIBRATION_SECONDS)))
     eye_debouncer = EyeDebouncer()
+    calibration_reported = False
     alarm = Alarm()
     source = args.source if args.source is not None else cfg["camera_index"]
     if isinstance(source, str) and source.isdigit():
@@ -130,6 +134,10 @@ def main() -> None:
     alert_starts: deque[float] = deque()
     last_alarm_active = False
     display_pitch = display_yaw = display_fps = display_frame_ms = display_yolo_ms = None
+    display_capture_ms = display_face_mesh_ms = display_yolo_stage_ms = None
+    display_jpeg_ms = display_drawing_ms = display_display_ms = None
+    last_stage_times: dict[str, float] = {}
+    last_complete_frame_ms = 0.0
     lost_since: float | None = None
     last_frame = np.zeros((480, 640, 3), dtype=np.uint8)
     capture_enabled = bool(cfg.get("false_alarm_capture_enabled", True))
@@ -147,7 +155,9 @@ def main() -> None:
     try:
         while True:
             frame_started = time.perf_counter()
+            capture_started = time.perf_counter()
             ok, frame = cap.read()
+            capture_ms = (time.perf_counter() - capture_started) * 1000
             wall_t = time.monotonic()
             if not ok:
                 if is_file:
@@ -177,10 +187,12 @@ def main() -> None:
             frame_index += 1
             last_frame = frame
             t = source_time(cap, is_file, frame_index, wall_t, source_fps)
+            face_started = time.perf_counter()
             try:
                 face_measurement = face_extractor.measure(frame)
             except (ValueError, cv2.error):
                 face_measurement = None
+            face_mesh_ms = (time.perf_counter() - face_started) * 1000
             face_box = face_measurement.box if face_measurement is not None else None
             face_visible = face_measurement is not None
             face_not_found = not face_visible
@@ -188,8 +200,11 @@ def main() -> None:
             brightness = float(np.mean(gray))
             sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
             camera_clear = brightness >= MINIMUM_BRIGHTNESS and sharpness >= MINIMUM_SHARPNESS
+            yolo_started = time.perf_counter()
             if face_visible and (frame_index - 1) % inference_interval == 0:
                 last_detections = detector.detect(frame)
+            yolo_stage_ms = ((time.perf_counter() - yolo_started) * 1000
+                             if face_visible and (frame_index - 1) % inference_interval == 0 else 0.0)
             detections = list(last_detections) if face_visible else []
             detections = keep_driver_region(detections, frame.shape, cfg["driver_roi"])
             active_face_box = (expand_face_box(
@@ -200,58 +215,81 @@ def main() -> None:
                                              float(cfg["eye_pair_max_size_ratio"]))
             calibrated = args.no_calibration or calibration.update(t, face_measurement)
             ear = face_measurement.ear if face_measurement is not None else None
-            ear_closed = (ear_says_closed(ear, calibration.ear_baseline)
-                          if calibrated and not args.no_calibration else None)
-            eye_candidate = combine_eye_signals(yolo_eye_state, ear_closed)
-            eye_state = eye_debouncer.update(eye_candidate, t)
             pitch_delta = 0.0
             yaw_delta = 0.0
             if calibrated and face_measurement is not None and not args.no_calibration:
                 pitch_delta = angle_delta(face_measurement.pitch_degrees, calibration.pitch_baseline) * HEAD_DOWN_DIRECTION
                 yaw_delta = angle_delta(face_measurement.yaw_degrees, calibration.yaw_baseline)
+            ear_usable = ear_is_usable_at_yaw(
+                yaw_delta, float(cfg.get("ear_max_yaw_for_decision", EAR_MAX_YAW_FOR_DECISION)))
+            ear_closed = (ear_says_closed(ear, calibration.ear_baseline)
+                          if calibrated and not args.no_calibration and ear_usable else None)
+            ear_sure_closed = (ear_is_surely_closed(ear, calibration.ear_baseline)
+                               if calibrated and not args.no_calibration and ear_usable else False)
+            eye_candidate = combine_eye_signals(yolo_eye_state, ear_closed, ear_sure_closed)
+            eye_state = eye_debouncer.update(eye_candidate, t)
+            if calibrated and not args.no_calibration and not calibration_reported:
+                cutoff = calibration.ear_baseline * cfg.get("ear_closed_baseline_fraction", 0.60)
+                print(f"Eye calibration ready: EAR baseline={calibration.ear_baseline:.3f}, closed cutoff={cutoff:.3f}")
+                calibration_reported = True
             yawn = calibrated and any(name == "Yawn" for name, _, _ in detections)
             monitor_eye_state = (False if not calibrated and face_visible else
                                  None if eye_candidate is None else eye_state)
             monitor.update(t, monitor_eye_state, yawn,
                            face_visible=face_visible, head_pitch=pitch_delta,
                            head_yaw=yaw_delta, camera_clear=camera_clear)
-            incoming_state = monitor.alert_level()
-            safe_to_clear = (calibrated and face_visible and camera_clear and eye_candidate is False
-                             and eye_state is False
+            incoming_state = monitor.alert_level() if calibrated else "NORMAL"
+            safe_to_clear = (calibrated and face_visible and camera_clear and eye_state is False
                              and pitch_delta < cfg["head_down_angle_degrees"]
                              and abs(yaw_delta) < cfg["head_turn_angle_degrees"])
             state = alarm.update(incoming_state, t, safe_to_clear=safe_to_clear)
             alarm_active = state != "NORMAL"
-            display_reason = (monitor.reason() if state == incoming_state
+            display_reason = ("Calibrating - look forward with eyes open" if not calibrated else
+                              monitor.reason() if state == incoming_state
                              else "Hold alert until eyes are open, head is up, and face is visible")
             if alarm_active and not last_alarm_active:
                 alert_starts.append(wall_t)
             last_alarm_active = alarm_active
             while alert_starts and alert_starts[0] < wall_t - 1800:
                 alert_starts.popleft()
-            frame_ms = (time.perf_counter() - frame_started) * 1000 if 'frame_started' in locals() else 0.0
-            fps = metrics.record(wall_t, monitor.score(), monitor.perclos(), monitor.yawn_events(), state,
-                                 detector.last_latency_ms, monitor.eye_status(), display_reason, alarm_active,
-                                 monitor.eye_coverage(), monitor.head_drop_active, ear,
-                                 pitch_delta, yaw_delta, state, frame_ms)
+            fps = metrics.estimate_fps(wall_t)
             display_pitch = smooth_display(display_pitch, pitch_delta)
             display_yaw = smooth_display(display_yaw, yaw_delta)
             display_fps = smooth_display(display_fps, fps)
-            display_frame_ms = smooth_display(display_frame_ms, frame_ms)
+            display_frame_ms = smooth_display(display_frame_ms, last_complete_frame_ms)
             display_yolo_ms = smooth_display(display_yolo_ms, detector.last_latency_ms)
+            display_capture_ms = smooth_display(display_capture_ms, capture_ms)
+            display_face_mesh_ms = smooth_display(display_face_mesh_ms, face_mesh_ms)
+            display_yolo_stage_ms = smooth_display(display_yolo_stage_ms, yolo_stage_ms)
+            display_jpeg_ms = smooth_display(display_jpeg_ms, last_stage_times.get("jpeg_encode_ms", 0.0))
+            display_drawing_ms = smooth_display(display_drawing_ms, last_stage_times.get("drawing_ms", 0.0))
+            display_display_ms = smooth_display(display_display_ms, last_stage_times.get("display_ms", 0.0))
+            drawing_started = time.perf_counter()
             color = {"NORMAL": (50, 200, 50), "WARNING": (0, 180, 255), "DROWSY": (0, 0, 255),
                      "CRITICAL": (0, 0, 255), "DRIVER_NOT_FOUND": (0, 180, 255),
                      "CAMERA_UNCLEAR": (0, 180, 255)}[state]
-            cv2.rectangle(frame, (0, 0), (frame.shape[1], min(160, frame.shape[0])), (18, 18, 18), -1)
+            cv2.rectangle(frame, (0, 0), (frame.shape[1], min(210, frame.shape[0])), (18, 18, 18), -1)
             put_text_fit(frame, f"{state} | {display_reason}", 25, color, .58)
             put_text_fit(frame, ALERT_POLICIES[state]["message"], 49, color)
             if debug_enabled:
                 ear_display = f"{ear:.2f}" if ear is not None else "n/a"
-                put_text_fit(frame, f"Eyes: {monitor.eye_status()}  EAR: {ear_display}  PERCLOS: {monitor.perclos():.2f}", 73, (245, 245, 245))
+                ear_baseline = calibration.ear_baseline if calibrated and not args.no_calibration else None
+                ear_cutoff = (ear_baseline * cfg.get("ear_closed_baseline_fraction", 0.60)
+                              if ear_baseline is not None else None)
+                cutoff_display = f"/{ear_cutoff:.2f}" if ear_cutoff is not None else ""
+                put_text_fit(frame, f"Eyes: {monitor.eye_status()}  EAR: {ear_display}{cutoff_display}  PERCLOS: {monitor.perclos():.2f}", 73, (245, 245, 245))
                 put_text_fit(frame, f"Head pitch: {display_pitch:.1f} deg  Head turn: {display_yaw:.1f} deg  Yawns: {monitor.yawn_events()}", 97, (245, 245, 245))
                 put_text_fit(frame, f"FPS: {display_fps:.1f}  Frame: {display_frame_ms:.1f} ms  YOLO: {display_yolo_ms:.1f} ms  Eye coverage: {monitor.eye_coverage():.0%}", 121, (245, 245, 245))
                 camera_label = "CLEAR" if camera_clear else "DARK / BLURRED"
-                put_text_fit(frame, f"Camera: {camera_label}  Calibration: {'READY' if calibrated else 'LOOK FORWARD, EYES OPEN'}", 145, (245, 245, 245))
+                if calibrated:
+                    calibration_label = "READY"
+                elif calibration.failed:
+                    calibration_label = "FAILED - look forward with eyes open"
+                else:
+                    calibration_label = "CALIBRATING - eyes open, face forward"
+                put_text_fit(frame, f"Camera: {camera_label}  {calibration_label}", 145, (245, 245, 245))
+                put_text_fit(frame, f"Stage ms - capture: {display_capture_ms:.1f}  face mesh: {display_face_mesh_ms:.1f}  YOLO: {display_yolo_stage_ms:.1f}", 169, (245, 245, 245))
+                put_text_fit(frame, f"Stage ms - JPEG: {display_jpeg_ms:.1f}  draw: {display_drawing_ms:.1f}  display: {display_display_ms:.1f}", 193, (245, 245, 245))
             if active_face_box is not None:
                 cv2.rectangle(frame, active_face_box[:2], active_face_box[2:], (255, 180, 0), 2)
             if cfg.get("show_detection_boxes", True):
@@ -261,35 +299,74 @@ def main() -> None:
                     cv2.rectangle(frame, (x1, y1), (x2, y2), col, 2)
                     cv2.putText(frame, f"{name} {confidence:.2f}", (x1, max(20, y1 - 6)),
                                 cv2.FONT_HERSHEY_SIMPLEX, .48, col, 1)
+            drawing_ms = (time.perf_counter() - drawing_started) * 1000
+            jpeg_started = time.perf_counter()
+            jpeg_encode_ms = 0.0
             if capture_enabled:
-                encoded_ok, encoded = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 65])
-                if encoded_ok:
-                    clean_ok, clean_encoded = cv2.imencode(".jpg", clean_frame, [cv2.IMWRITE_JPEG_QUALITY, 65])
-                    payload = encoded.tobytes()
-                    clean_payload = clean_encoded.tobytes() if clean_ok else payload
-                    clip_buffer.append((wall_t, payload, clean_payload))
-                    clip_bytes += len(payload) + len(clean_payload)
-                    while clip_buffer and (clip_buffer[0][0] < wall_t - clip_seconds or clip_bytes > clip_max_bytes):
-                        _, displayed, clean = clip_buffer.popleft()
-                        clip_bytes -= len(displayed) + len(clean)
+                clip_interval = max(1, int(cfg.get("clip_frame_interval", CLIP_FRAME_INTERVAL)))
+                if frame_index % clip_interval == 0:
+                    height, width = frame.shape[:2]
+                    max_width = int(cfg.get("clip_max_width", CLIP_MAX_WIDTH))
+                    clip_scale = min(1.0, max_width / width)
+                    clip_size = (max(1, int(width * clip_scale)), max(1, int(height * clip_scale)))
+                    display_clip_frame = (frame if clip_scale == 1.0 else
+                                          cv2.resize(frame, clip_size, interpolation=cv2.INTER_AREA))
+                    clean_clip_frame = (clean_frame if clip_scale == 1.0 else
+                                        cv2.resize(clean_frame, clip_size, interpolation=cv2.INTER_AREA))
+                    encoded_ok, encoded = cv2.imencode(".jpg", display_clip_frame,
+                                                       [cv2.IMWRITE_JPEG_QUALITY, 65])
+                    clean_ok, clean_encoded = cv2.imencode(".jpg", clean_clip_frame,
+                                                           [cv2.IMWRITE_JPEG_QUALITY, 65])
+                    if encoded_ok and clean_ok:
+                        payload = encoded.tobytes()
+                        clean_payload = clean_encoded.tobytes()
+                        clip_buffer.append((wall_t, payload, clean_payload))
+                        clip_bytes += len(payload) + len(clean_payload)
+                        while clip_buffer and (clip_buffer[0][0] < wall_t - clip_seconds or clip_bytes > clip_max_bytes):
+                            _, displayed, clean = clip_buffer.popleft()
+                            clip_bytes -= len(displayed) + len(clean)
+                jpeg_encode_ms = (time.perf_counter() - jpeg_started) * 1000
+            display_started = time.perf_counter()
             cv2.imshow(window_name, frame)
+            display_ms = (time.perf_counter() - display_started) * 1000
+            frame_ms = (time.perf_counter() - frame_started) * 1000
+            stage_times = {"capture_ms": capture_ms, "face_mesh_ms": face_mesh_ms,
+                           "yolo_stage_ms": yolo_stage_ms, "jpeg_encode_ms": jpeg_encode_ms,
+                           "drawing_ms": drawing_ms, "display_ms": display_ms}
+            metrics.record(wall_t, monitor.score(), monitor.perclos(), monitor.yawn_events(), state,
+                           detector.last_latency_ms, monitor.eye_status(), display_reason, alarm_active,
+                           monitor.eye_coverage(), monitor.head_drop_active, ear,
+                           pitch_delta, yaw_delta, state, frame_ms, stage_times)
+            last_stage_times = stage_times
+            last_complete_frame_ms = frame_ms
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 break
             if key == ord("d"):
                 debug_enabled = not debug_enabled
+            if key == ord("c"):
+                calibration.reset()
+                monitor.reset()
+                eye_debouncer.reset()
+                alarm.force_normal()
+                calibration_reported = False
             if key == ord("f") and capture_enabled and clip_buffer:
                 output_dir = Path(cfg.get("false_alarm_dir", cfg["session_log_dir"]))
                 output_dir.mkdir(parents=True, exist_ok=True)
                 output_path = output_dir / f"false_alarm_{datetime.now():%Y%m%d_%H%M%S}.mp4"
                 clean_path = output_path.with_name(output_path.stem + "_clean.mp4")
                 h, w = frame.shape[:2]
-                writer = cv2.VideoWriter(str(output_path), cv2.VideoWriter_fourcc(*"mp4v"), source_fps, (w, h))
+                clip_interval = max(1, int(cfg.get("clip_frame_interval", CLIP_FRAME_INTERVAL)))
+                max_width = int(cfg.get("clip_max_width", CLIP_MAX_WIDTH))
+                clip_scale = min(1.0, max_width / w)
+                clip_size = (max(1, int(w * clip_scale)), max(1, int(h * clip_scale)))
+                clip_fps = max(1.0, source_fps / clip_interval)
+                writer = cv2.VideoWriter(str(output_path), cv2.VideoWriter_fourcc(*"mp4v"), clip_fps, clip_size)
                 if not writer.isOpened():
                     writer.release()
                     print("Could not save review clip: this OpenCV installation cannot write mp4v video.")
                     continue
-                clean_writer = cv2.VideoWriter(str(clean_path), cv2.VideoWriter_fourcc(*"mp4v"), source_fps, (w, h))
+                clean_writer = cv2.VideoWriter(str(clean_path), cv2.VideoWriter_fourcc(*"mp4v"), clip_fps, clip_size)
                 if not clean_writer.isOpened():
                     writer.release()
                     clean_writer.release()

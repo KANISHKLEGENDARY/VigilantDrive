@@ -7,7 +7,9 @@ from statistics import median
 
 import cv2
 import numpy as np
-from src.config import CALIBRATION_SECONDS, MIN_CALIBRATION_EAR, MIN_CALIBRATION_FRAMES
+from src.config import (CALIBRATION_MAX_PITCH_SPREAD, CALIBRATION_SECONDS,
+                        EAR_MAX_OPEN_CALIBRATION, EAR_MIN_OPEN_CALIBRATION,
+                        MIN_CALIBRATION_EAR, MIN_CALIBRATION_FRAMES)
 
 
 @dataclass
@@ -69,8 +71,9 @@ class FaceSignalExtractor:
         except ImportError as exc:
             raise RuntimeError("Face landmarks need MediaPipe. Install it with: python -m pip install -r requirements.txt") from exc
         self.mesh = mp.solutions.face_mesh.FaceMesh(
-            static_image_mode=False, max_num_faces=2, refine_landmarks=True,
+            static_image_mode=False, max_num_faces=2, refine_landmarks=False,
             min_detection_confidence=0.5, min_tracking_confidence=0.5)
+        self.last_good_pose: tuple[float, float] | None = None
 
     def measure(self, frame) -> FaceSignals | None:
         """Return EAR, pitch, and yaw for the largest visible face, if any."""
@@ -85,7 +88,11 @@ class FaceSignalExtractor:
         points = [(point.x * width, point.y * height) for point in face.landmark]
         left = _eye_aspect_ratio(points, (33, 160, 158, 133, 153, 144))
         right = _eye_aspect_ratio(points, (362, 385, 387, 263, 373, 380))
-        pitch, yaw = _head_angles(points, width, height)
+        try:
+            pitch, yaw = _head_angles(points, width, height)
+            self.last_good_pose = (pitch, yaw)
+        except (ValueError, cv2.error):
+            pitch, yaw = self.last_good_pose or (0.0, 0.0)
         box = (max(0, int(min(point[0] for point in points))), max(0, int(min(point[1] for point in points))),
                min(width, int(max(point[0] for point in points))),
                min(height, int(max(point[1] for point in points))))
@@ -108,20 +115,47 @@ class FaceCalibration:
         self.pitch_baseline: float | None = None
         self.yaw_baseline: float | None = None
         self.ready = False
+        self.failed = False
+
+    def reset(self) -> None:
+        """Clear the baseline so calibration can be performed again."""
+        self.started_at = None
+        self.ears.clear()
+        self.pitches.clear()
+        self.yaws.clear()
+        self.ear_baseline = None
+        self.pitch_baseline = None
+        self.yaw_baseline = None
+        self.ready = False
+        self.failed = False
 
     def update(self, now: float, signals: FaceSignals | None) -> bool:
         """Collect measurements until calibration time passes; return when ready."""
         if self.ready:
             return True
-        if self.started_at is None:
-            self.started_at = now
         if signals is not None and signals.ear >= MIN_CALIBRATION_EAR:
+            if self.started_at is None:
+                self.started_at = now
             self.ears.append(signals.ear)
             self.pitches.append(signals.pitch_degrees)
             self.yaws.append(signals.yaw_degrees)
+        if self.started_at is None:
+            return False
         if now - self.started_at < self.seconds or len(self.ears) < MIN_CALIBRATION_FRAMES:
             return False
-        self.ear_baseline = median(self.ears)
+        ear_baseline = median(self.ears)
+        unwrapped_pitch = [self.pitches[0] + angle_delta(value, self.pitches[0])
+                           for value in self.pitches]
+        if (not EAR_MIN_OPEN_CALIBRATION <= ear_baseline <= EAR_MAX_OPEN_CALIBRATION
+                or max(unwrapped_pitch) - min(unwrapped_pitch) > CALIBRATION_MAX_PITCH_SPREAD):
+            self.failed = True
+            self.started_at = now
+            self.ears.clear()
+            self.pitches.clear()
+            self.yaws.clear()
+            return False
+        self.failed = False
+        self.ear_baseline = ear_baseline
         self.pitch_baseline = _angle_median(self.pitches)
         self.yaw_baseline = _angle_median(self.yaws)
         self.ready = True

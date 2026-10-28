@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
-from src.face_signals import _head_angles, angle_delta
+from types import SimpleNamespace
+from src.face_signals import FaceSignalExtractor, _head_angles, angle_delta
 
 
 def projected_landmarks(rotation_axis: int, angle_degrees: float):
@@ -29,3 +30,20 @@ def test_solvepnp_reports_nod_as_pitch_and_side_turn_as_yaw():
 
 def test_angle_difference_handles_wrapping_at_180_degrees():
     assert angle_delta(-179.0, 179.0) == 2.0
+
+
+def test_solvepnp_failure_reuses_last_pose_instead_of_losing_face(monkeypatch):
+    extractor = FaceSignalExtractor.__new__(FaceSignalExtractor)
+    landmarks = [SimpleNamespace(x=0.4 + index / 10000, y=0.4 + index / 12000)
+                 for index in range(468)]
+    extractor.mesh = SimpleNamespace(process=lambda rgb: SimpleNamespace(
+        multi_face_landmarks=[SimpleNamespace(landmark=landmarks)]))
+    extractor.last_good_pose = (7.0, -4.0)
+
+    def fail_pose(*args):
+        raise ValueError("synthetic solvePnP failure")
+
+    monkeypatch.setattr("src.face_signals._head_angles", fail_pose)
+    signals = extractor.measure(np.zeros((100, 100, 3), dtype=np.uint8))
+    assert signals is not None
+    assert (signals.pitch_degrees, signals.yaw_degrees) == (7.0, -4.0)
