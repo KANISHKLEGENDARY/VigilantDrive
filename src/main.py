@@ -274,7 +274,11 @@ def main() -> None:
             color = {"NORMAL": (50, 200, 50), "WARNING": (0, 180, 255), "DROWSY": (0, 0, 255),
                      "CRITICAL": (0, 0, 255), "DRIVER_NOT_FOUND": (0, 180, 255),
                      "CAMERA_UNCLEAR": (0, 180, 255)}[state]
-            cv2.rectangle(frame, (0, 0), (frame.shape[1], min(210, frame.shape[0])), (18, 18, 18), -1)
+            # Keep the camera pixels visible beneath diagnostics instead of hiding the driver's head.
+            status_layer = frame.copy()
+            cv2.rectangle(status_layer, (0, 0),
+                          (frame.shape[1], min(210, frame.shape[0])), (18, 18, 18), -1)
+            cv2.addWeighted(status_layer, 0.42, frame, 0.58, 0, frame)
             put_text_fit(frame, f"{state} | {display_reason}", 25, color, .58)
             put_text_fit(frame, ALERT_POLICIES[state]["message"], 49, color)
             if debug_enabled:
