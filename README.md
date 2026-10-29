@@ -76,3 +76,7 @@ The following numbers are from the evaluation output previously provided for the
 | Live webcam FPS and drowsiness-event metrics | **not measured yet** |
 
 Rerun `scripts/evaluate.py` to produce metrics with the current configured image size. Keep the checkpoint name, data split, and image size with any number you report.
+
+## Live Demo
+
+[▶ Watch the VigilantDrive webcam demo](https://drive.google.com/file/d/1j0QdbNd_1lMVuAHmn596Js9WXs4eTPP_/view?usp=sharing)
